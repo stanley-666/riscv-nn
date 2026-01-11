@@ -1,0 +1,104 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <string.h>
+
+#include "nn_layer.h"
+#include "nn_utils.h"
+#include "nn_infer_cpu.h"
+#include "nn_infer_vpu.h"
+
+#include "gesture_input.h"
+#include "weights_fused_fp32.h"
+
+#define GESTURE_MAX_ELEMS 12000  // max tensor elements across the model (float)
+static float buffer1_static[GESTURE_MAX_ELEMS] __attribute__((aligned(64)));
+static float buffer2_static[GESTURE_MAX_ELEMS] __attribute__((aligned(64)));
+
+void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
+    (void)num_elem;
+    (void)dtype;
+    size_t size = GESTURE_MAX_ELEMS * sizeof(float);
+    buffer1 = buffer1_static;
+    buffer2 = buffer2_static;
+    memset(buffer1, 0, size);
+    memset(buffer2, 0, size);
+}
+
+#ifdef WEIGHTS_FUSED_FP32_H
+    void gesture_all_1dcnn_f32_rvv() {
+        printf("1D CNN Inference Demo\n");
+        printf("Initializing ping-pong buffers...\n");
+        init_pingpong_buffer(GESTURE_MAX_ELEMS, ELEM_FLOAT32);
+        printf("Defining layers...\n");
+        clock_t layer_def_start = clock();
+        NNModule *transpose_input = nn_Transpose(50, 5, TRANSPOSE_CW_TO_WC, ELEM_FLOAT32);
+        NNModule *conv1 = nn_Conv1d(5, 50, 3, 32, 1, 0, RELU, conv1d_1_weight, conv1d_1_bias, NULL, NULL, ELEM_FLOAT32);
+        NNModule *conv2 = nn_Conv1d(32, conv1->outputShape.W, 3, 64, 1, 0, RELU, conv1d_2_weight, conv1d_2_bias, NULL, NULL, ELEM_FLOAT32);
+        NNModule *conv3 = nn_Conv1d(64, conv2->outputShape.W, 3, 128, 1, 0, RELU, conv1d_3_weight, conv1d_3_bias, NULL, NULL, ELEM_FLOAT32);
+        NNModule *conv4 = nn_Conv1d(128, conv3->outputShape.W, 3, 256, 1, 0, RELU, conv1d_4_weight, conv1d_4_bias, NULL, NULL, ELEM_FLOAT32);
+        NNModule *conv5 = nn_Conv1d(256, conv4->outputShape.W, 1, 256, 1, 0, RELU, conv1d_5_weight, conv1d_5_bias, NULL, NULL, ELEM_FLOAT32);
+        int flatten_len = conv5->outputShape.C * conv5->outputShape.W;
+        NNModule *fc = nn_Linear(flatten_len, 4, SOFTMAX, softmax_1_weight, softmax_1_bias, NULL, NULL, ELEM_FLOAT32);
+        clock_t layer_def_end = clock();
+        double layer_def_elapsed = (double)(layer_def_end - layer_def_start) / CLOCKS_PER_SEC;
+        printf("Layer definition time: %.6f seconds\n", layer_def_elapsed);
+        CNN* model = createCNN();
+        clock_t add_layer_start = clock();
+
+        addLayer(model, transpose_input);
+        addLayer(model, conv1);
+        addLayer(model, conv2);
+        addLayer(model, conv3);
+        addLayer(model, conv4);
+        addLayer(model, conv5);
+        addLayer(model, fc);
+        clock_t add_layer_end = clock();
+        double add_layer_elapsed = (double)(add_layer_end - add_layer_start) / CLOCKS_PER_SEC;
+        printf("Layer addition time: %.6f seconds\n", add_layer_elapsed);
+        forward_input_bytes = 250 * sizeof(float);
+
+        const float *gestures[] = { gesture_1, gesture_2, gesture_3 };
+        const char *gesture_names[] = { "gesture_1", "gesture_2", "gesture_3" };
+        for (int g = 0; g < 3; ++g) {
+            clock_t start_time = clock();
+            forward_fp32_vpu(model, (void *)gestures[g]);
+            clock_t end_time = clock();
+            float* output = (float *) buffer2;
+            double elapsed_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
+            printf("[%s] Inference time: %.6f seconds\n", gesture_names[g], elapsed_time);
+            //printf("[%s] Output vector (4): \ngesture_0_score : %.6f\ngesture_1_score : %.6f\ngesture_2_score : %.6f\ngesture_3_score : %.6f\n", gesture_names[g], output[0], output[1], output[2], output[3]);
+            float sorted_scores[4];
+            int sorted_idx[4];
+            for (int i = 0; i < 4; ++i) {
+                sorted_scores[i] = output[i];
+                sorted_idx[i] = i;
+            }
+            for (int i = 0; i < 3; ++i) {
+                for (int j = i + 1; j < 4; ++j) {
+                    if (sorted_scores[j] > sorted_scores[i]) {
+                        float tmp = sorted_scores[i];
+                        sorted_scores[i] = sorted_scores[j];
+                        sorted_scores[j] = tmp;
+                        int tmp_idx = sorted_idx[i];
+                        sorted_idx[i] = sorted_idx[j];
+                        sorted_idx[j] = tmp_idx;
+                    }
+                }
+            }
+            printf("[%s] Sorted scores (high -> low):\n", gesture_names[g]);
+            for (int i = 0; i < 4; ++i) {
+                printf("  gesture_%d : %.6f\n", sorted_idx[i], sorted_scores[i]);
+            }
+            printf("[%s] Predicted gesture: gesture_%d with score %.6f\n", gesture_names[g], sorted_idx[0], sorted_scores[0]);
+            
+        }
+
+        freeCNN(model);
+    }
+#endif
+
+int main() {
+    gesture_all_1dcnn_f32_rvv();
+    return 0;
+}
