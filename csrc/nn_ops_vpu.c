@@ -173,11 +173,10 @@ void conv1d_i8_vpu(NNModule *layer, void *input, void *output)
                     int8_t inval = in_ptr[ic];
                     if (inval == 0)
                         continue;
-                    vint16m4_t vrow16 = __riscv_vmv_v_x_i16m4(inval, vl);
                     int col_idx = k * inC + ic;
                     const int16_t *wt = &weight_buffer[col_idx * outC + oc];
                     vint16m4_t vwt16 = __riscv_vle16_v_i16m4(wt, vl);
-                    vacc = __riscv_vwmacc_vv_i32m8(vacc, vrow16, vwt16, vl);
+                    vacc = __riscv_vwmacc_vx_i32m8(vacc, inval, vwt16, vl);
                 }
             }
 
@@ -1020,15 +1019,6 @@ void save_vpu(NNModule *layer, void *input, void *output)
     }
 
     size_t bytes = layer->params.save.bytes;
-    size_t cap = (size_t)BUFFER_SIZE * sizeof_dtype(layer->dtype);
-    if (bytes > cap) {
-        printf("Save overflow: bytes=%zu cap=%zu H=%d W=%d C=%d dtype=%d\n",
-               bytes, cap,
-               layer->inputShape.H, layer->inputShape.W, layer->inputShape.C,
-               layer->dtype);
-        exit(EXIT_FAILURE);
-    }
-
     int8_t *src_ptr = (int8_t *)input;
     int8_t *skip_ptr = (int8_t *)layer->params.save.buffer;
     (void)output; // output is intentionally untouched to avoid CPU writes
