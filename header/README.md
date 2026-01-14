@@ -1,131 +1,76 @@
-# 1D CNN header
-Here I use the same naming logic as pytorch to create neural network in C program.
+# NN Header API (C)
 
-These C programs only supports inference for 1d cnn, but can be extended flexibly 2D conv, 3D conv .. etc
+This folder defines the public C API for building and running CNN graphs
+on RISC-V. The APIs mirror common PyTorch naming where possible.
 
-For input, weight, bias, zero point, scale is needed but not strict to the data types. 
+## Supported Layers
 
-and `Input` need to put as 1D `[N][C][H][W]`
+From `header/nn_layer.h`:
 
+- `nn_Conv1d`
+- `nn_Conv2d`
+- `nn_Pool1d` (max/avg)
+- `nn_Pool2d` (max/avg)
+- `nn_AdaptiveMaxPool1d`
+- `nn_AdaptiveAvgPool2d`
+- `nn_Linear`
+- `nn_Transpose`
+- `nn_Save` / `nn_Add` (residual branches)
 
-`Weight` need to put as 1D [][][]
+## Supported Activations
 
+From `header/nn_param.h`:
 
-## parameter
-see 1dcnn_param.h
+- `RELU`, `SIGMOID`, `TANH`, `LEAKY_RELU`, `SOFTMAX`, `NONE`
 
-For now, this header only support 
+## Data Layout
 
-### Activation function type
-* RELU
-* SIGMOID
-* TANH
-* LEAKY_RELU
-* SOFTMAX
-* NONE
+All tensors use NCHW layout:
 
-### Layer type
+- `N`: batch size (currently assumed to be 1 in kernels)
+- `C`: channels
+- `H`: height (for 1D models, use `H=1`)
+- `W`: width / length
 
-* CONV, POOL, Fully connected(FC)
+Input buffers and outputs are 1D contiguous arrays in NCHW order. For 1D
+models the layout is `[C][W]` (since `N=1, H=1`).
 
-## create layer
-First you want to use this header you must 
+Weights are stored as contiguous arrays:
 
-```C!
-CNN* model = createCNN();
-```
+- Conv1d: `[outC][inC][K]`
+- Conv2d: `[outC][inC][K][K]` (square kernels)
+- Linear: `[outDim][inDim]`
 
-then
+Bias is `[outC]` for conv and `[outDim]` for linear.
 
-```C!
-// create model
-CNN* model = createCNN();
+## Quantization Parameters
 
-// create layer
+For `ELEM_INT8`, `M` and `zps` are required and are applied per output channel:
 
-Layer *conv1 =  nn_Conv1d(...);
+- `M`: scale factors (typically `scale_in * scale_w / scale_out`)
+- `zps`: output/activation zero points
 
-// connect layer
+For `ELEM_FLOAT32`, these can be `NULL`.
 
+### Quantization Limitations
+
+- Only output/activation zero points are supported.
+- Weight zero points are not supported (weights are assumed symmetric, `zp=0`).
+- Input zero points are not used.
+
+## Limitations
+
+- Inference only (no training).
+- Batch size is effectively `N=1` in current kernels.
+- Conv2d is limited to square kernels/stride/padding and no dilation.
+- Kernel implementations primarily support `ELEM_INT8` and `ELEM_FLOAT32`.
+  Other element types are declared but not fully implemented.
+
+## Minimal Usage
+
+```c
+CNN *model = createCNN();
+NNModule *conv1 = nn_Conv1d(...);
 addLayer(model, conv1);
-
-...
-```
-
-## forward layer
-After model creation, layer creation
-
-and connect layers each other to the model
-
-Right now, you need to prepare input data to forward.
-
-```C!
-...
-
-forward(inputdata)
-
-...
-```
-
-## prepare input
-
-
-## example of a PTQ
-
-
-```C!
-void sentence_1dcnn() {
-    printf("1D CNN Inference Demo\n");
-    // init ping-pong buffer
-    printf("Initializing ping-pong buffers...\n");
-    init_pingpong_buffer(BUFFER_SIZE, ELEM_INT8);
-    /* definition layers  */
-    printf("Defining layers...\n");
-    Layer *conv1 = nn_Conv1d(1, 384, 5, 64, 1, 2, RELU, conv1_weight, conv1_bias, conv1_M, conv1_zero_points, ELEM_INT8);
-    Layer *conv2 = nn_Conv1d(64, conv1->outputShape.W, 5, 128, 1, 2, RELU, conv2_weight, conv2_bias, conv2_M, conv2_zero_points, ELEM_INT8);
-    Layer *conv3 = nn_Conv1d(128, conv2->outputShape.W, 3, 256, 1, 1, RELU, conv3_weight, conv3_bias, conv3_M, conv3_zero_points, ELEM_INT8);
-    Layer *maxpool = nn_AdaptiveMaxPool1d(conv3->outputShape.C, conv3->outputShape.W, 1, ELEM_INT8);
-    Layer *fc1 = nn_Linear(maxpool->outputShape.C * maxpool->outputShape.W, 128, NONE, fc1_weight, fc1_bias, fc1_M, fc1_zero_points, ELEM_INT8);
-    Layer *fc2 = nn_Linear(128, 1, SIGMOID, fc2_weight, fc2_bias, fc2_M, fc2_zero_points, ELEM_INT8);
-
-    /* connect layers together */
-    printf("Creating CNN model...\n");
-    CNN* model = createCNN();
-
-    printf("Adding layers to the model...\n");
-    addLayer(model, conv1);
-    addLayer(model, conv2);
-    addLayer(model, conv3);
-    addLayer(model, maxpool);
-    addLayer(model, fc1);
-    addLayer(model, fc2);
-
-    /* input data */
-    int8_t *embedding = (int8_t*)random_embedding;
-
-    // inference
-
-    forward(model, embedding);
-
-    // print output
-    int8_t *output = (int8_t *) buffer2; // final output in buffer2
-    printf("Ground truth (valid_embedding): %d\n", valid_embedding);
-    printf("Model prediction (output): %d\n", output[0]);
-
-    if (output[0] == valid_embedding) {
-        printf("Prediction correct!\n");
-    } else {
-        printf("Prediction incorrect!\n");
-    }
-
-    if (output[0] == 1)
-        printf("→ Model predicts: Valid sentence\n");
-    else
-        printf("→ Model predicts: Invalid sentence\n");
-
-    freeCNN(model);
-    free(buffer1);
-    free(buffer2);
-}
-
+forward(model, input);
 ```

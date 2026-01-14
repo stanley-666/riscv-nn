@@ -1,22 +1,34 @@
-# 1D_CNN
+# RISC-V 1D CNN Inference
 
-## v1.1
+This repository provides a C-based 1D CNN inference stack targeting RISC-V,
+with both scalar CPU and vector (RVV/VPU) execution paths, plus testbenches
+and Python utilities for model preparation.
 
-speedup padding operation in conv1d forwarding
+## Architecture Overview
 
-## v1.2
+- Model API and layer definitions live in `header/` and expose a PyTorch-like
+  naming style for building 1D CNN graphs in C.
+- Core inference code is in `csrc/`, split into layer logic, utilities, and
+  backend-specific kernels (CPU and VPU/RVV).
+- Testbenches in `testbench/` provide end-to-end inference runs for different
+  models and data types, and include Spike performance results per test.
+- Python utilities in `py/` support training, calibration, or data prep for
+  specific models (e.g., sentence or ResNet variants).
+- `gemmini/` contains Gemmini integration and related software for accelerator
+  experiments.
 
-- unroll `inC` inner loop by 4 for RVV conv1d fast paths (int8 and float32)
-- tail case handles remaining `inC` elements that do not fit the 4-way unroll
+## Repository Layout
 
-## v1.3
+```
+.
+├── csrc/               # C source: inference logic and kernels (CPU/RVV)
+├── header/             # Public headers and model/layer API
+├── testbench/          # End-to-end model testbenches + Spike results
+├── py/                 # Training/calibration/data utilities
+└── gemmini/            # Gemmini integration and tooling
+```
 
-- add unroll2/unroll4/unroll8 variants for conv1d and fc RVV paths
-- rename fast kernels to include the unroll factor in function names
+## Testbench Notes
 
-## Operator optimizations
-
-- conv1d (int8): RVV vectorization across outC, unroll2/4/8 variants on `inC`, tail handling for `inC % unroll`, cache blocking not applied
-- conv1d (float32): RVV vectorization across outC, unroll2/4/8 variants on `inC`, tail handling for `inC % unroll`, cache blocking not applied
-- fc (float32): RVV vectorization across outW, outW blocking, unroll2/4/8 variants on `inDim`, tail handling for `inDim % unroll`
-- fc (int8): RVV vectorization across outW, outW blocking, unroll2/4/8 variants on `inDim`, tail handling for `inDim % unroll`
+Each testbench directory includes its own `README.md` with Spike performance
+tables. Use those files to record metrics such as cycles, CPI, and runtime.
