@@ -17,6 +17,12 @@
 static float buffer1_static[SENTENCE_FP32_MAX_ELEMS] __attribute__((aligned(64)));
 static float buffer2_static[SENTENCE_FP32_MAX_ELEMS] __attribute__((aligned(64)));
 
+uint64_t read_rdcycle() {
+    uint64_t cycle;
+    __asm__ volatile ("rdcycle %0" : "=r" (cycle));
+    return cycle;
+}
+
 void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
     (void)num_elem;
     (void)dtype;

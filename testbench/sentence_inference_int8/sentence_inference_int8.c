@@ -17,6 +17,11 @@
 #define SENTENCE_INT8_MAX_ELEMS (384 * 256)  // max tensor elements across the model
 static int8_t buffer1_static[SENTENCE_INT8_MAX_ELEMS] __attribute__((aligned(64)));
 static int8_t buffer2_static[SENTENCE_INT8_MAX_ELEMS] __attribute__((aligned(64)));
+uint64_t read_rdcycle() {
+    uint64_t cycle;
+    __asm__ volatile ("rdcycle %0" : "=r" (cycle));
+    return cycle;
+}
 
 void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
     (void)num_elem;
@@ -153,7 +158,7 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         NNModule *transposed_conv3 = nn_Transpose(conv3->outputShape.W, conv3->outputShape.C, TRANSPOSE_WC_TO_CW, ELEM_INT8);
         NNModule *maxpool = nn_AdaptiveMaxPool1d(conv3->outputShape.C, conv3->outputShape.W, 1, ELEM_INT8);
         NNModule *fc1 = nn_Linear(maxpool->outputShape.C * maxpool->outputShape.W, 128, RELU, fc1_weight, fc1_bias, fc1_M, fc1_zero_points, ELEM_INT8);
-        NNModule *fc2 = nn_Linear(128, 1, NONE, fc2_weight, fc2_bias, fc2_M, fc2_zero_points, ELEM_INT8);
+        NNModule *fc2 = nn_Linear(128, 1, SIGMOID, fc2_weight, fc2_bias, fc2_M, fc2_zero_points, ELEM_INT8);
 
         CNN* model = createCNN();
         addLayer(model, conv1);
@@ -169,8 +174,12 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         const int8_t *embedding = random_embedding;
         bool label = valid_embedding;
         clock_t start_time = clock();
+        uint64_t start_cycle = read_rdcycle();
         forward_int8_vpu(model, (void *)embedding);
+        uint64_t end_cycle = read_rdcycle();
         clock_t end_time = clock();
+        uint64_t cycle_diff = end_cycle - start_cycle;
+        printf("Inference cycles: %lu cycles\n", cycle_diff);
         double elapsed_time = (double)(end_time - start_time);
         const int8_t *output = (int8_t *)buffer2;
         printf("Model prediction (output[0]): %d\n", output[0]);
@@ -243,6 +252,6 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
 #endif
 
 int main() {
-    sentence_all_i8_rvv();
+    sentence_i8_rvv();
     return 0;
 }
