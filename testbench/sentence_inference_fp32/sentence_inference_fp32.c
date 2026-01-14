@@ -39,7 +39,7 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         NNModule *conv3 = nn_Conv1d(128, conv2->outputShape.W, 3, 256, 1, 1, RELU, conv3_weight, conv3_bias, NULL, NULL, ELEM_FLOAT32);
         NNModule *transposed_conv3 = nn_Transpose(conv3->outputShape.W, conv3->outputShape.C, TRANSPOSE_WC_TO_CW, ELEM_FLOAT32);
         NNModule *maxpool = nn_AdaptiveMaxPool1d(conv3->outputShape.C, conv3->outputShape.W, 1,  ELEM_FLOAT32);
-        NNModule *fc1 = nn_Linear(maxpool->outputShape.C * maxpool->outputShape.W, 128, NONE, fc1_weight, fc1_bias, NULL, NULL, ELEM_FLOAT32);
+        NNModule *fc1 = nn_Linear(maxpool->outputShape.C * maxpool->outputShape.W, 128, RELU, fc1_weight, fc1_bias, NULL, NULL, ELEM_FLOAT32);
         NNModule *fc2 = nn_Linear(128, 1, SIGMOID, fc2_weight, fc2_bias, NULL, NULL, ELEM_FLOAT32);
         clock_t layer_def_end = clock();
         double layer_def_elapsed = (double)(layer_def_end - layer_def_start) / CLOCKS_PER_SEC;
@@ -104,7 +104,7 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         NNModule *conv3 = nn_Conv1d(128, conv2->outputShape.W, 3, 256, 1, 1, RELU, conv3_weight, conv3_bias, NULL, NULL, ELEM_FLOAT32);
         NNModule *transposed_conv3 = nn_Transpose(conv3->outputShape.W, conv3->outputShape.C, TRANSPOSE_WC_TO_CW, ELEM_FLOAT32);
         NNModule *maxpool = nn_AdaptiveMaxPool1d(conv3->outputShape.C, conv3->outputShape.W, 1,  ELEM_FLOAT32);
-        NNModule *fc1 = nn_Linear(maxpool->outputShape.C * maxpool->outputShape.W, 128, NONE, fc1_weight, fc1_bias, NULL, NULL, ELEM_FLOAT32);
+        NNModule *fc1 = nn_Linear(maxpool->outputShape.C * maxpool->outputShape.W, 128, RELU, fc1_weight, fc1_bias, NULL, NULL, ELEM_FLOAT32);
         NNModule *fc2 = nn_Linear(128, 1, SIGMOID, fc2_weight, fc2_bias, NULL, NULL, ELEM_FLOAT32);
 
         /* connect layers together */

@@ -1,1 +1,2 @@
 ./sentence/embeddings/*.csv
+./testbench/resnet50_weights.h

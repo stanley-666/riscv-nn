@@ -162,6 +162,9 @@ void conv1d_i8_vpu(NNModule *layer, void *input, void *output)
     const int32_t *Z          = (const int32_t *)layer->params.conv.zps;
     int32_t *acc_buffer = (int32_t *)layer->params.conv.acc_buffer;
 
+    static int conv1_debug_printed = 0;
+    static int conv2_debug_printed = 0;
+    static int conv3_debug_printed = 0;
     for (int pos = 0; pos < outW; ++pos) {
         for (int oc = 0; oc < outC; ) {
             size_t vl = __riscv_vsetvl_e16m4(outC - oc);
@@ -798,6 +801,7 @@ void fullyconnected_vpu(NNModule *layer, void *input, void *output)
             const int32_t *bias_i32 = (const int32_t*)layer->params.fc.bias;
             const float *M = (const float *)layer->params.fc.M;
             const int32_t *Z = (const int32_t *)layer->params.fc.zps; // zero point
+            static int fc1_debug_printed = 0;
 
             if (act == SOFTMAX)
                 printf("Warning: INT8 FC softmax not implemented in RVV path.\n");
@@ -894,6 +898,7 @@ void AdaptiveMaxPool1d_vpu(NNModule *layer, void *input, void *output) {
     case ELEM_INT8: {
         const int8_t *in = (const int8_t*)input;
         int8_t *out = (int8_t*)output;
+        static int pool_debug_printed = 0;
 
         // 快速路徑：global pooling
         if (outW == 1) {

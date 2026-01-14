@@ -96,76 +96,79 @@ def export_quantized_weights_gemmini(model_int8, filename="weights_q_gemmini.h")
     with open(filename, "w") as f:
         f.write("#ifndef WEIGHTS_Q_GEMMINI_H\n#define WEIGHTS_Q_GEMMINI_H\n\n#include <stdint.h>\n\n")
 
-        prev_scale = 1.0  # 第一層輸入假設是 int8 [-128,127]
+        prev_scale = 1.0  # 輸入已是 int8，對 Gemmini/RVV 假設 zp=0
         layer_idx = 1
 
-        for name, module in model_int8.named_modules():
-            # 僅處理含 quantized weight 的層
-            if hasattr(module, "weight") and module.weight() is not None:
-                w_q = module.weight()
-                w_int8 = w_q.int_repr().cpu().numpy()
-                qscheme = w_q.qscheme()
+        ordered_layers = ["conv1", "conv2", "conv3", "fc1", "fc2"]
+        modules = dict(model_int8.named_modules())
 
-                # === 取 scale / zero_point ===
-                if qscheme in (torch.per_tensor_symmetric, torch.per_tensor_affine):
-                    scales = np.array([float(w_q.q_scale())], dtype=np.float32)
-                    zps = np.array([int(w_q.q_zero_point())], dtype=np.int32)
-                elif qscheme in (torch.per_channel_symmetric, torch.per_channel_affine):
-                    scales = w_q.q_per_channel_scales().cpu().numpy().astype(np.float32)
-                    zps = w_q.q_per_channel_zero_points().cpu().numpy().astype(np.int32)
-                else:
-                    raise RuntimeError(f"Unsupported qscheme: {qscheme}")
+        for name in ordered_layers:
+            module = modules.get(name)
+            if module is None or not hasattr(module, "weight") or module.weight() is None:
+                raise RuntimeError(f"Missing quantized module: {name}")
 
-                out_ch = len(scales)
-                s_in = prev_scale
-                s_out = float(getattr(module, "scale", 1.0))
-                M = (s_in * scales) / s_out
+            w_q = module.weight()
+            w_int8 = w_q.int_repr().cpu().numpy()
+            qscheme = w_q.qscheme()
 
-                f.write(f"// Layer {layer_idx}: {name}, shape={w_int8.shape}, qscheme={qscheme}\n")
-                f.write("// Gemmini input layout: NHWC\n")
-                f.write("// Gemmini weight layout: O H W I\n")
-                f.write(f"// scale_in={s_in:.8f}, scale_out={s_out:.8f}\n\n")
+            # === 取 weight scale ===
+            if qscheme in (torch.per_tensor_symmetric, torch.per_tensor_affine):
+                scales = np.array([float(w_q.q_scale())], dtype=np.float32)
+            elif qscheme in (torch.per_channel_symmetric, torch.per_channel_affine):
+                scales = w_q.q_per_channel_scales().cpu().numpy().astype(np.float32)
+            else:
+                raise RuntimeError(f"Unsupported qscheme: {qscheme}")
 
-                # === 匯出 scale ===
-                f.write(f"const float {name.replace('.', '_')}_scales[{out_ch}] = "
-                        "{" + ",".join(f"{v:.8f}" for v in scales) + "};\n")
+            out_ch = len(scales)
+            s_in = prev_scale
+            s_out = float(getattr(module, "scale", 1.0))
+            z_out = int(getattr(module, "zero_point", 0))
+            M = (s_in * scales) / s_out
 
-                # === 匯出 zero_point ===
-                f.write(f"elem_t {name.replace('.', '_')}_zero_points[{out_ch}] = "
-                        "{" + ",".join(map(str, zps)) + "};\n")
+            f.write(f"// Layer {layer_idx}: {name}, shape={w_int8.shape}, qscheme={qscheme}\n")
+            f.write("// Gemmini input layout: NHWC\n")
+            f.write("// Gemmini weight layout: O H W I\n")
+            f.write(f"// scale_in={s_in:.8f}, scale_out={s_out:.8f}, zp_out={z_out}\n\n")
 
-                # === 匯出每通道 M ===
-                f.write(f"const float {name.replace('.', '_')}_M[{out_ch}] = "
-                        "{" + ",".join(f"{v:.8f}" for v in M) + "};\n")
+            # === 匯出 scale ===
+            f.write(f"const float {name.replace('.', '_')}_scales[{out_ch}] = "
+                    "{" + ",".join(f"{v:.8f}" for v in scales) + "};\n")
 
-                # === 匯出權重 (Gemmini OHWI) ===
-                weight_name = f"{name.replace('.', '_')}_weight"
-                if w_int8.ndim == 4:
-                    # O I H W -> O H W I
-                    w_ohwi = np.transpose(w_int8, (0, 2, 3, 1))
-                elif w_int8.ndim == 3:
-                    # O I K -> O 1 K I
-                    w_oki = np.transpose(w_int8, (0, 2, 1))
-                    w_ohwi = w_oki[:, np.newaxis, :, :]
-                elif w_int8.ndim == 2:
-                    # FC: O I -> O 1 1 I
-                    w_ohwi = w_int8[:, np.newaxis, np.newaxis, :]
-                else:
-                    raise RuntimeError(f"Unsupported weight ndim: {w_int8.ndim}")
+            # === 匯出 output activation zero_point ===
+            zps_out = np.full(out_ch, z_out, dtype=np.int32)
+            f.write(f"elem_t {name.replace('.', '_')}_zero_points[{out_ch}] = "
+                    "{" + ",".join(map(str, zps_out)) + "};\n")
 
-                o_dim, h_dim, w_dim, i_dim = w_ohwi.shape
-                f.write(f"elem_t {weight_name}[{o_dim}][{h_dim}][{w_dim}][{i_dim}] = {{\n")
-                for o in range(o_dim):
-                    f.write("    {\n")
-                    for h in range(h_dim):
-                        f.write("        {\n")
-                        for w in range(w_dim):
-                            f.write("            {" + ",".join(map(str, w_ohwi[o, h, w, :])) + "},\n")
-                        f.write("        },\n")
-                    f.write("    },\n")
-                f.write("};\n\n")
+            # === 匯出每通道 M ===
+            f.write(f"const float {name.replace('.', '_')}_M[{out_ch}] = "
+                    "{" + ",".join(f"{v:.8f}" for v in M) + "};\n")
 
-                prev_scale = s_out  # 下一層輸入 scale
+            # === 匯出權重 (Gemmini OHWI) ===
+            weight_name = f"{name.replace('.', '_')}_weight"
+            if w_int8.ndim == 4:
+                # O I H W -> O H W I
+                w_ohwi = np.transpose(w_int8, (0, 2, 3, 1))
+            elif w_int8.ndim == 3:
+                # O I K -> O 1 K I
+                w_oki = np.transpose(w_int8, (0, 2, 1))
+                w_ohwi = w_oki[:, np.newaxis, :, :]
+            elif w_int8.ndim == 2:
+                # FC: O I -> O 1 1 I
+                w_ohwi = w_int8[:, np.newaxis, np.newaxis, :]
+            else:
+                raise RuntimeError(f"Unsupported weight ndim: {w_int8.ndim}")
+
+            o_dim, h_dim, w_dim, i_dim = w_ohwi.shape
+            f.write(f"elem_t {weight_name}[{o_dim}][{h_dim}][{w_dim}][{i_dim}] = {{\n")
+            for o in range(o_dim):
+                f.write("    {\n")
+                for h in range(h_dim):
+                    f.write("        {\n")
+                    for w in range(w_dim):
+                        f.write("            {" + ",".join(map(str, w_ohwi[o, h, w, :])) + "},\n")
+                    f.write("        },\n")
+                f.write("    },\n")
+            f.write("};\n\n")
 
             # === 匯出 bias ===
             if hasattr(module, "bias") and module.bias() is not None:
@@ -180,6 +183,7 @@ def export_quantized_weights_gemmini(model_int8, filename="weights_q_gemmini.h")
                 f.write(f"acc_t {name.replace('.', '_')}_bias[{flat_b.size}] = "
                         "{" + ",".join(map(str, flat_b)) + "};\n\n")
 
+            prev_scale = s_out  # 下一層輸入 scale
             layer_idx += 1
 
         f.write("#endif // WEIGHTS_Q_GEMMINI_H\n")
