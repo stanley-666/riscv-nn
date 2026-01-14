@@ -12,7 +12,7 @@ INCLUDE := -I./header -I./csrc $(addprefix -I,$(TB_INC))
 
 
 # Default profile
-CONFIG ?= zvl512b
+CONFIG ?= zvl512b_cycle
 # Source & Target
 CORE_SRC := $(filter-out csrc/main.c,$(wildcard csrc/*.c))
 TB_SRCS  := $(shell find testbench -name '*.c')
@@ -47,6 +47,12 @@ endif
 
 ifeq ($(CONFIG), zvl512b)
   ARCH := rv64gcv_zvbb_zvl512b_zve64d
+  ABI  := lp64d
+  TUNE := rocket
+endif
+
+ifeq ($(CONFIG), zvl512b_cycle)
+  ARCH := rv64gcv_zicntr_zihpm_zvbb_zvl512b_zve64d
   ABI  := lp64d
   TUNE := rocket
 endif

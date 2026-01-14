@@ -15,6 +15,12 @@
 static float buffer1_static[GESTURE_MAX_ELEMS] __attribute__((aligned(64)));
 static float buffer2_static[GESTURE_MAX_ELEMS] __attribute__((aligned(64)));
 
+uint64_t read_rdcycle() {
+    uint64_t cycle;
+    __asm__ volatile ("rdcycle %0" : "=r" (cycle));
+    return cycle;
+}
+
 void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
     (void)num_elem;
     (void)dtype;
@@ -62,9 +68,13 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         const char *gesture_names[] = { "gesture_1", "gesture_2", "gesture_3" };
         for (int g = 0; g < 3; ++g) {
             clock_t start_time = clock();
+            uint64_t start_cycle = read_rdcycle();
             forward_fp32_vpu(model, (void *)gestures[g]);
+            uint64_t end_cycle = read_rdcycle();
             clock_t end_time = clock();
             float* output = (float *) buffer2;
+            uint64_t cycle_diff = end_cycle - start_cycle;
+            printf("[%s] Inference cycles: %lu cycles\n", gesture_names[g], cycle_diff);
             double elapsed_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
             printf("[%s] Inference time: %.6f seconds\n", gesture_names[g], elapsed_time);
             //printf("[%s] Output vector (4): \ngesture_0_score : %.6f\ngesture_1_score : %.6f\ngesture_2_score : %.6f\ngesture_3_score : %.6f\n", gesture_names[g], output[0], output[1], output[2], output[3]);

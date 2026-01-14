@@ -18,6 +18,12 @@
 static float buffer1_static[RESNET_MAX_ELEMS] __attribute__((aligned(64)));
 static float buffer2_static[RESNET_MAX_ELEMS] __attribute__((aligned(64)));
 
+uint64_t read_rdcycle() {
+    uint64_t cycle;
+    __asm__ volatile ("rdcycle %0" : "=r" (cycle));
+    return cycle;
+}
+
 void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
     (void)num_elem;
     (void)dtype;
@@ -219,8 +225,12 @@ void resnet50_inference(void) {
 
     forward_input_bytes = input_elems * sizeof(float);
     clock_t start = clock();
+    uint64_t start_cycle = read_rdcycle();
     forward_fp32_vpu(model, (void*)input_nhwc);
+    uint64_t end_cycle = read_rdcycle();
     clock_t end = clock();
+    uint64_t cycle_diff = end_cycle - start_cycle;
+    printf("ResNet50 inference cycles: %lu cycles\n", cycle_diff);
     double elapsed = (double)(end - start) / CLOCKS_PER_SEC;
     printf("ResNet50 inference time: %.6f seconds\n", elapsed);
 
