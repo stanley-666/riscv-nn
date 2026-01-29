@@ -1,11 +1,8 @@
 #include "nn_infer_vpu.h"
 #include <string.h>
 #include <time.h>
+#include <stdio.h>
 
-static double ts_diff_ms(clock_t start, clock_t end)
-{
-    return (double)(end - start) * 1000.0 / (double)CLOCKS_PER_SEC;
-}
 void forward_int8_vpu(CNN *net, void *input)
 {
     
@@ -16,6 +13,7 @@ void forward_int8_vpu(CNN *net, void *input)
     NNModule *currentLayer = net->firstModule;
     void *src = buffer1;
     void *dst = buffer2;
+    int layer_idx = 0;
     while (currentLayer != NULL)
     {    
         switch (currentLayer->type)
@@ -67,6 +65,7 @@ void forward_int8_vpu(CNN *net, void *input)
         src = dst;
         dst = tmp;
         currentLayer = currentLayer->next;
+        layer_idx++;
     }
 }
 

@@ -34,7 +34,7 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
 }
 
 #ifdef WEIGHTS_FP32_H
-    void sentence_1dcnn_f32() {
+    void test_sentence_logit_fp32() {
         printf("1D CNN Inference Demo\n");
         printf("Initializing ping-pong buffers...\n");
         init_pingpong_buffer(SENTENCE_FP32_MAX_ELEMS, ELEM_FLOAT32);
@@ -46,7 +46,7 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         NNModule *transposed_conv3 = nn_Transpose(conv3->outputShape.W, conv3->outputShape.C, TRANSPOSE_WC_TO_CW, ELEM_FLOAT32);
         NNModule *maxpool = nn_AdaptiveMaxPool1d(conv3->outputShape.C, conv3->outputShape.W, 1,  ELEM_FLOAT32);
         NNModule *fc1 = nn_Linear(maxpool->outputShape.C * maxpool->outputShape.W, 128, RELU, fc1_weight, fc1_bias, NULL, NULL, ELEM_FLOAT32);
-        NNModule *fc2 = nn_Linear(128, 1, SIGMOID, fc2_weight, fc2_bias, NULL, NULL, ELEM_FLOAT32);
+        NNModule *fc2 = nn_Linear(128, 1, NONE, fc2_weight, fc2_bias, NULL, NULL, ELEM_FLOAT32);
         clock_t layer_def_end = clock();
         double layer_def_elapsed = (double)(layer_def_end - layer_def_start) / CLOCKS_PER_SEC;
         printf("Layer definition time: %.6f seconds\n", layer_def_elapsed);
@@ -165,6 +165,7 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
 #endif
 
 int main() {
+    test_sentence_logit_fp32()();
     sentence_all_f32();
     return 0;
 }

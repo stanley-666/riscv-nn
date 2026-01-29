@@ -425,6 +425,12 @@ def main():
 
         export_quantized_weights(model_int8, "weights_q.h")
         print("✅ Quantized weights exported to weights_q.h")
+        torch.save({
+        "model_state_dict": model_int8.state_dict(),
+        "qconfig": str(model_fp32.qconfig),
+        }, "weights/sentence_cnn_int8.pth")
+        
+        
         export_quantized_weights_gemmini(model_int8, "weights_q_gemmini.h")
         print("✅ Quantized weights exported to weights_q_gemmini.h")
         for name, module in model_int8.named_modules():

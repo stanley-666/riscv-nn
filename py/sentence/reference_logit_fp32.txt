@@ -1,0 +1,7 @@
+source_csv: embeddings/test_rest_int8.csv
+row_index: 2658
+text: <abbr id=x tabindex=1 onbeforeactivate=alert(1)></abbr>
+label: 1
+weights: weights/best_weights.pth (fp32)
+logit: 11.355240
+prob: 0.999988

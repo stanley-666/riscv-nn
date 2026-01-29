@@ -20,3 +20,27 @@ python main.py --mode inference
 ```python
 python main.py --mode calibration
 ```
+
+### INT8 Inference
+```python
+# 使用校正後的同一份權重；PyTorch 沒有 AdaptiveMaxPool1d 的量化 kernel，
+# 腳本會載入 int8 權重後解量化為 FP32 推論（權重仍來自 calibration）
+python int8_infer.py --csv_file embeddings/test_rest_int8.csv --weight_path weights/sentence_cnn_int8.pth --batch_size 32
+```
+> 若要純 INT8 路徑，請將模型的 `AdaptiveMaxPool1d` 改成有量化 kernel 的 `MaxPool1d`（kernel/stride 使輸出長度=1），重新校正/量化後再推論。
+
+### Single-sample logit for C-side check（pre-sigmoid）
+```python
+python dump_logit.py --csv embeddings/test_rest_int8.csv --row 2658 --weights weights/sentence_cnn_int8.pth
+# 輸出 reference_logit.txt，含 pre-sigmoid logit 與 prob
+```
+
+## Quantization strategy
+- Post-training static quantization with PyTorch observers (`torch.quantization`): `HistogramObserver` for activations (qint8, per-tensor symmetric, zero-point forced to 0) and `PerChannelMinMaxObserver` for weights (qint8, per-channel symmetric).
+- Calibration runs on CPU over `embeddings/test_rest_int8.csv` (first ~2000 samples) to insert observers and convert the trained FP32 `SentenceCNN` into INT8.
+- Running `python main.py --mode calibration` exports C-friendly weights/metadata (`weights_q.h` for generic C, `weights_q_gemmini.h` for Gemmini/RVV layout) and an INT8 checkpoint at `weights/sentence_cnn_int8.pth`.
+
+## Requirements
+- Python 3.x, PyTorch with CPU quantization backend enabled (FBGEMM for x86).
+- Python packages: `pandas`, `numpy`, `scikit-learn`, `matplotlib`, `seaborn`, `torch`, `onnx`, `onnxruntime`, `tqdm` (optional progress bars).
+- Training/calibration CSVs expected under `py/sentence/embeddings/` (`train_int8.csv`, `test_rest_int8.csv`) generated from llama.cpp.

@@ -5,7 +5,11 @@ df = pd.read_csv("embeddings/test_rest_int8.csv")
 features = [f"q{i}" for i in range(384)]
 
 # 隨機挑一筆
-row = df.sample(1).iloc[0]
+#row = df.sample(1).iloc[0]
+
+
+# fixed
+row = df.iloc[2658]
 text = row["text"]
 emb = row[features].to_numpy(dtype="int8")
 label = int(row["label"])
