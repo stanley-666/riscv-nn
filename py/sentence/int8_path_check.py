@@ -37,15 +37,27 @@ def build_quantized_model(weight_path: str, device: torch.device):
 
 def q_adaptive_max_pool1d(qx: torch.Tensor, output_size: int = 1) -> torch.Tensor:
     """
-    Quantized AdaptiveMaxPool1d for output_size=1 (the current model case).
-    Keeps input scale/zp.
+    AdaptiveMaxPool1d implemented by:
+    1) dequantize to fp32
+    2) pool in fp32 (output_size=1)
+    3) round half-away-from-zero back to int domain
+    4) requantize with *same* scale/zp so the following quantized FC sees quint8.
+
+    This matches the user's request: pool在浮點，但結果是整數，然後強制轉回 int8。
     """
     assert qx.ndim == 3, "expected (N, C, L)"
     if output_size != 1:
         raise ValueError("Only output_size=1 supported here")
-    max_vals = qx.int_repr().amax(dim=2, keepdim=True)
+
+    # fp32 pool
+    xf = torch.nn.functional.adaptive_max_pool1d(qx.dequantize(), output_size)  # (N,C,1)
+
+    # round half away from zero to mimic C side
+    xf_rounded = torch.sign(xf) * torch.floor(torch.abs(xf) + 0.5)
+
+    # requantize using the same activation scale/zp
     return torch.quantize_per_tensor(
-        max_vals.float(), scale=qx.q_scale(), zero_point=qx.q_zero_point(), dtype=qx.dtype
+        xf_rounded, scale=qx.q_scale(), zero_point=qx.q_zero_point(), dtype=torch.quint8
     )
 
 
@@ -69,13 +81,9 @@ def forward_int8(model, emb_int8: np.ndarray, transpose_wc_to_cw: bool = False, 
         return x
 
     if transpose_wc_to_cw:
-        # C 路徑在 conv3 後做 TRANSPOSE_WC_TO_CW，這裡以 permute 模擬並保留原 scale/zp
-        x = torch.quantize_per_tensor(
-            x.int_repr().permute(0, 2, 1).float(),
-            scale=x.q_scale(),
-            zero_point=x.q_zero_point(),
-            dtype=x.dtype,
-        )
+        # PyTorch conv1d 輸出已是 (N, C, L)。C 端轉置是為了把 WC 轉回 CW。
+        # 這裡保持不變（等效於已經在 CW），避免打亂維度導致 FC K 維錯誤。
+        pass
 
     x = q_adaptive_max_pool1d(x, output_size=1)
     print("[py] pool dst[:8]:", x.int_repr().view(-1)[:8].tolist())

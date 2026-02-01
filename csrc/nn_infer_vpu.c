@@ -3,6 +3,31 @@
 #include <time.h>
 #include <stdio.h>
 
+#define LOGITS_PRINT_COUNT 8
+
+static void dump_layer_logits_i8(const NNModule *layer, int layer_idx, const void *tensor)
+{
+    /* Skip dump for RES_SAVE because output buffer is intentionally untouched. */
+    if (layer->type == RES_SAVE) {
+        printf("[int8][layer %d %s] skip dump (no direct output)\n", layer_idx, layer_type_name(layer->type));
+        return;
+    }
+
+    const int8_t *data = (const int8_t *)tensor;
+    size_t total = (size_t)layer->outputShape.N * layer->outputShape.C * layer->outputShape.H * layer->outputShape.W;
+
+    if (!data || total == 0) {
+        printf("[int8][layer %d %s] logits unavailable (total=%zu)\n", layer_idx, layer_type_name(layer->type), total);
+        return;
+    }
+
+    size_t to_print = total < LOGITS_PRINT_COUNT ? total : LOGITS_PRINT_COUNT;
+    printf("[int8][layer %d %s] logits first %zu/%zu: ", layer_idx, layer_type_name(layer->type), to_print, total);
+    for (size_t i = 0; i < to_print; ++i)
+        printf("%d ", data[i]);
+    printf("\n");
+}
+
 void forward_int8_vpu(CNN *net, void *input)
 {
     
@@ -60,6 +85,8 @@ void forward_int8_vpu(CNN *net, void *input)
             add_vpu(currentLayer, src, dst);
             break;
         }
+
+        dump_layer_logits_i8(currentLayer, layer_idx, dst);
 
         void *tmp = src;
         src = dst;
