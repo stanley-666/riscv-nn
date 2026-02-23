@@ -71,11 +71,22 @@ void requantize_activate_store_rvv(const int32_t *src,
     }
 
     /*
-    else if(act = LEAKY_RELU) {
+    else if(act == LEAKY_RELU) {
         // to be implemented
     }
     */
 
+    else if (act == SOFTMAX) {
+        // to be implemented
+        printf("Softmax activation not implemented in requantize_activate_store_rvv.\n");
+        exit(EXIT_FAILURE);
+    }
+
+    else if (act == SIGMOID) {
+        // to be implemented
+        printf("Sigmoid activation not implemented in requantize_activate_store_rvv.\n");
+        exit(EXIT_FAILURE);
+    }
     for (int i = 0; i < len; ++i) {
         int32_t acc = src[i] + bias[i];
         int8_t rq = requantize_int8(acc, scale[i], zp[i]);
@@ -377,143 +388,139 @@ void conv2d_fp32_vpu(NNModule *layer, void *input, void *output)
 }
 
 // Input: NHWC with H=1, layout [N=1][W][C]; Output: same layout, W pooled.
-void maxpool1d_vpu(NNModule *layer, void *input, void *output)
+void maxpool1d_int8_vpu(NNModule *layer, void *input, void *output)
 {
     int outW = layer->outputShape.W;
     int inW  = layer->inputShape.W;
     int inC  = layer->inputShape.C;
     int poolSize = layer->params.pool.poolSize;
     int stride   = layer->params.pool.stride;
-    elem_type dtype   = layer->dtype;
 
-    switch (dtype) {
-    case ELEM_FLOAT32: {
-        const float *in = (const float*)input;
-        float *out = (float*)output;
+    const int8_t *in = (const int8_t*)input;
+    int8_t *out = (int8_t*)output;
 
-        for (int pos = 0; pos < outW; pos++) {
-            int start = pos * stride;
-            int end = start + poolSize;
-            if (end > inW) end = inW;
+    for (int pos = 0; pos < outW; pos++) {
+        int start = pos * stride;
+        int end = start + poolSize;
+        if (end > inW) end = inW;
 
-            for (int c = 0; c < inC; ) {
-                size_t vl = __riscv_vsetvl_e32m8(inC - c);
-                vfloat32m8_t vmaxv = __riscv_vfmv_v_f_f32m8(-INFINITY, vl);
-                for (int w = start; w < end; w++) {
-                    const float *ptr = &in[w * inC + c];
-                    vfloat32m8_t vin = __riscv_vle32_v_f32m8(ptr, vl);
-                    vmaxv = __riscv_vfmax_vv_f32m8(vmaxv, vin, vl);
-                }
-                __riscv_vse32_v_f32m8(&out[pos * inC + c], vmaxv, vl);
-                c += (int)vl;
+        for (int c = 0; c < inC; ) {
+            size_t vl = __riscv_vsetvl_e8m8(inC - c);
+            vint8m8_t vmaxv = __riscv_vmv_v_x_i8m8(INT8_MIN, vl);
+            for (int w = start; w < end; w++) {
+                const int8_t *ptr = &in[w * inC + c];
+                vint8m8_t vin = __riscv_vle8_v_i8m8(ptr, vl);
+                vmaxv = __riscv_vmax_vv_i8m8(vmaxv, vin, vl);
             }
+            __riscv_vse8_v_i8m8(&out[pos * inC + c], vmaxv, vl);
+            c += (int)vl;
         }
-        break;
-    }
-    case ELEM_INT8: {
-        const int8_t *in = (const int8_t*)input;
-        int8_t *out = (int8_t*)output;
-
-        for (int pos = 0; pos < outW; pos++) {
-            int start = pos * stride;
-            int end = start + poolSize;
-            if (end > inW) end = inW;
-
-            for (int c = 0; c < inC; ) {
-                size_t vl = __riscv_vsetvl_e8m8(inC - c);
-                vint8m8_t vmaxv = __riscv_vmv_v_x_i8m8(INT8_MIN, vl);
-                for (int w = start; w < end; w++) {
-                    const int8_t *ptr = &in[w * inC + c];
-                    vint8m8_t vin = __riscv_vle8_v_i8m8(ptr, vl);
-                    vmaxv = __riscv_vmax_vv_i8m8(vmaxv, vin, vl);
-                }
-                __riscv_vse8_v_i8m8(&out[pos * inC + c], vmaxv, vl);
-                c += (int)vl;
-            }
-        }
-        break;
-    }
-    default:
-        printf("Unsupported dtype in maxpool1d_vpu (NHWC)\n");
-        exit(EXIT_FAILURE);
     }
 }
 
-// Input: NHWC with H=1, layout [N=1][W][C]; Output: same layout, W pooled.
-void avgpool1d_vpu(NNModule *layer, void *input, void *output)
+void maxpool1d_fp32_vpu(NNModule *layer, void *input, void *output)
 {
     int outW = layer->outputShape.W;
     int inW  = layer->inputShape.W;
     int inC  = layer->inputShape.C;
     int poolSize = layer->params.pool.poolSize;
     int stride   = layer->params.pool.stride;
-    elem_type dtype   = layer->dtype;
 
-    switch (dtype) {
-    case ELEM_FLOAT32: {
-        const float *in = (const float*)input;
-        float *out = (float*)output;
+    const float *in = (const float*)input;
+    float *out = (float*)output;
 
-        for (int pos = 0; pos < outW; pos++) {
-            int start = pos * stride;
-            int end = start + poolSize;
-            if (end > inW) end = inW;
-            int len = end - start;
+    for (int pos = 0; pos < outW; pos++) {
+        int start = pos * stride;
+        int end = start + poolSize;
+        if (end > inW) end = inW;
 
-            for (int c = 0; c < inC; ) {
-                size_t vl = __riscv_vsetvl_e32m8(inC - c);
-                vfloat32m8_t vsum = __riscv_vfmv_v_f_f32m8(0.0f, vl);
-                for (int w = start; w < end; w++) {
-                    const float *ptr = &in[w * inC + c];
-                    vfloat32m8_t vin = __riscv_vle32_v_f32m8(ptr, vl);
-                    vsum = __riscv_vfadd_vv_f32m8(vsum, vin, vl);
-                }
-                float inv = len > 0 ? 1.0f / (float)len : 0.0f;
-                vsum = __riscv_vfmul_vf_f32m8(vsum, inv, vl);
-                __riscv_vse32_v_f32m8(&out[pos * inC + c], vsum, vl);
-                c += (int)vl;
+        for (int c = 0; c < inC; ) {
+            size_t vl = __riscv_vsetvl_e32m8(inC - c);
+            vfloat32m8_t vmaxv = __riscv_vfmv_v_f_f32m8(-INFINITY, vl);
+            for (int w = start; w < end; w++) {
+                const float *ptr = &in[w * inC + c];
+                vfloat32m8_t vin = __riscv_vle32_v_f32m8(ptr, vl);
+                vmaxv = __riscv_vfmax_vv_f32m8(vmaxv, vin, vl);
             }
+            __riscv_vse32_v_f32m8(&out[pos * inC + c], vmaxv, vl);
+            c += (int)vl;
         }
-        break;
-    }
-    case ELEM_INT8: {
-        const int8_t *in = (const int8_t*)input;
-        int8_t *out = (int8_t*)output;
+    } 
+}
 
-        for (int pos = 0; pos < outW; pos++) {
-            int start = pos * stride;
-            int end = start + poolSize;
-            if (end > inW) end = inW;
-            int len = end - start;
+// Input: NHWC with H=1, layout [N=1][W][C]; Output: same layout, W pooled.
+void avgpool1d_int8_vpu(NNModule *layer, void *input, void *output)
+{
+    int outW = layer->outputShape.W;
+    int inW  = layer->inputShape.W;
+    int inC  = layer->inputShape.C;
+    int poolSize = layer->params.pool.poolSize;
+    int stride   = layer->params.pool.stride;
 
-            for (int c = 0; c < inC; ) {
-                size_t vl = __riscv_vsetvl_e8m4(inC - c);
-                vint16m8_t vsum = __riscv_vmv_v_x_i16m8(0, vl);
-                for (int w = start; w < end; w++) {
-                    const int8_t *ptr = &in[w * inC + c];
-                    vint8m4_t vin8 = __riscv_vle8_v_i8m4(ptr, vl);
-                    vint16m8_t vin16 = __riscv_vsext_vf2_i16m8(vin8, vl);
-                    vsum = __riscv_vadd_vv_i16m8(vsum, vin16, vl);
-                }
-                if (len > 0)
-                    vsum = __riscv_vdiv_vx_i16m8(vsum, len, vl);
-                vsum = __riscv_vmax_vx_i16m8(vsum, INT8_MIN, vl);
-                vsum = __riscv_vmin_vx_i16m8(vsum, INT8_MAX, vl);
-                vint8m4_t vout = __riscv_vncvt_x_x_w_i8m4(vsum, vl);
-                __riscv_vse8_v_i8m4(&out[pos * inC + c], vout, vl);
-                c += (int)vl;
+    const int8_t *in = (const int8_t*)input;
+    int8_t *out = (int8_t*)output;
+
+    for (int pos = 0; pos < outW; pos++) {
+        int start = pos * stride;
+        int end = start + poolSize;
+        if (end > inW) end = inW;
+        int len = end - start;
+
+        for (int c = 0; c < inC; ) {
+            size_t vl = __riscv_vsetvl_e8m4(inC - c);
+            vint16m8_t vsum = __riscv_vmv_v_x_i16m8(0, vl);
+            for (int w = start; w < end; w++) {
+                const int8_t *ptr = &in[w * inC + c];
+                vint8m4_t vin8 = __riscv_vle8_v_i8m4(ptr, vl);
+                vint16m8_t vin16 = __riscv_vsext_vf2_i16m8(vin8, vl);
+                vsum = __riscv_vadd_vv_i16m8(vsum, vin16, vl);
             }
+            if (len > 0)
+                vsum = __riscv_vdiv_vx_i16m8(vsum, len, vl);
+            vsum = __riscv_vmax_vx_i16m8(vsum, INT8_MIN, vl);
+            vsum = __riscv_vmin_vx_i16m8(vsum, INT8_MAX, vl);
+            vint8m4_t vout = __riscv_vncvt_x_x_w_i8m4(vsum, vl);
+            __riscv_vse8_v_i8m4(&out[pos * inC + c], vout, vl);
+            c += (int)vl;
         }
-        break;
     }
-    default:
-        printf("Unsupported dtype in avgpool1d_vpu (NHWC)\n");
-        exit(EXIT_FAILURE);
+}
+
+void avgpool1d_fp32_vpu(NNModule *layer, void *input, void *output)
+{
+    int outW = layer->outputShape.W;
+    int inW  = layer->inputShape.W;
+    int inC  = layer->inputShape.C;
+    int poolSize = layer->params.pool.poolSize;
+    int stride   = layer->params.pool.stride;
+
+    const float *in = (const float*)input;
+    float *out = (float*)output;
+
+    for (int pos = 0; pos < outW; pos++) {
+        int start = pos * stride;
+        int end = start + poolSize;
+        if (end > inW) end = inW;
+        int len = end - start;
+
+        for (int c = 0; c < inC; ) {
+            size_t vl = __riscv_vsetvl_e32m8(inC - c);
+            vfloat32m8_t vsum = __riscv_vfmv_v_f_f32m8(0.0f, vl);
+            for (int w = start; w < end; w++) {
+                const float *ptr = &in[w * inC + c];
+                vfloat32m8_t vin = __riscv_vle32_v_f32m8(ptr, vl);
+                vsum = __riscv_vfadd_vv_f32m8(vsum, vin, vl);
+            }
+            float inv = len > 0 ? 1.0f / (float)len : 0.0f;
+            vsum = __riscv_vfmul_vf_f32m8(vsum, inv, vl);
+            __riscv_vse32_v_f32m8(&out[pos * inC + c], vsum, vl);
+            c += (int)vl;
+        }
     }
 }
 
 // Input: NHWC (N=1, H=inH, W=inW, C=inC) padded if needed; Output: NHWC.
-void maxpool2d_vpu(NNModule *layer, void *input, void *output)
+void maxpool2d_int8_vpu(NNModule *layer, void *input, void *output)
 {
     // Limitations: NHWC layout, square kernel/stride/padding, batch=1.
     int outH = layer->outputShape.H;
@@ -523,65 +530,70 @@ void maxpool2d_vpu(NNModule *layer, void *input, void *output)
     int poolSize = layer->params.pool2d.poolSize;
     int stride   = layer->params.pool2d.stride;
     int padding  = layer->params.pool2d.padding;
-    elem_type dtype   = layer->dtype;
 
     int paddedW = inW + 2 * padding;
     void *padded_input = padded_input_create_nhwc_2d(layer, input);
 
-    switch (dtype) {
-    case ELEM_FLOAT32: {
-        const float *in = (const float *)padded_input;
-        float *out = (float *)output;
-        for (int oh = 0, h_start = 0; oh < outH; ++oh, h_start += stride) {
-            for (int ow = 0, w_start = 0; ow < outW; ++ow, w_start += stride) {
-                for (int c = 0; c < inC; ) {
-                    size_t vl = __riscv_vsetvl_e32m8(inC - c);
-                    vfloat32m8_t vmaxv = __riscv_vfmv_v_f_f32m8(-INFINITY, vl);
-
-                    for (int kh = 0; kh < poolSize; ++kh) {
-                        int h = h_start + kh;
-                        for (int kw = 0; kw < poolSize; ++kw) {
-                            int w = w_start + kw;
-                            const float *ptr = &in[(h * paddedW + w) * inC + c];
-                            vfloat32m8_t vin = __riscv_vle32_v_f32m8(ptr, vl);
-                            vmaxv = __riscv_vfmax_vv_f32m8(vmaxv, vin, vl);
-                        }
+    const int8_t *in = (const int8_t *)padded_input;
+    int8_t *out = (int8_t *)output;
+    for (int oh = 0, h_start = 0; oh < outH; ++oh, h_start += stride) {
+        for (int ow = 0, w_start = 0; ow < outW; ++ow, w_start += stride) {
+            for (int c = 0; c < inC; ) {
+                size_t vl = __riscv_vsetvl_e8m8(inC - c);
+                vint8m8_t vmaxv = __riscv_vmv_v_x_i8m8(INT8_MIN, vl);
+                const int8_t *row_ptr = &in[(h_start * paddedW + w_start) * inC + c];
+                for (int kh = 0; kh < poolSize; ++kh) {
+                    const int8_t *row = row_ptr + kh * paddedW * inC;
+                    for (int kw = 0; kw < poolSize; ++kw) {
+                        const int8_t *ptr = row + kw * inC;
+                        vint8m8_t vin = __riscv_vle8_v_i8m8(ptr, vl);
+                        vmaxv = __riscv_vmax_vv_i8m8(vmaxv, vin, vl);
                     }
-
-                    __riscv_vse32_v_f32m8(&out[(oh * outW + ow) * inC + c], vmaxv, vl);
-                    c += (int)vl;
                 }
+                __riscv_vse8_v_i8m8(&out[(oh * outW + ow) * inC + c], vmaxv, vl);
+                c += (int)vl;
             }
         }
-        break;
     }
-    case ELEM_INT8: {
-        const int8_t *in = (const int8_t *)padded_input;
-        int8_t *out = (int8_t *)output;
-        for (int oh = 0, h_start = 0; oh < outH; ++oh, h_start += stride) {
-            for (int ow = 0, w_start = 0; ow < outW; ++ow, w_start += stride) {
-                for (int c = 0; c < inC; ) {
-                    size_t vl = __riscv_vsetvl_e8m8(inC - c);
-                    vint8m8_t vmaxv = __riscv_vmv_v_x_i8m8(INT8_MIN, vl);
-                    const int8_t *row_ptr = &in[(h_start * paddedW + w_start) * inC + c];
-                    for (int kh = 0; kh < poolSize; ++kh) {
-                        const int8_t *row = row_ptr + kh * paddedW * inC;
-                        for (int kw = 0; kw < poolSize; ++kw) {
-                            const int8_t *ptr = row + kw * inC;
-                            vint8m8_t vin = __riscv_vle8_v_i8m8(ptr, vl);
-                            vmaxv = __riscv_vmax_vv_i8m8(vmaxv, vin, vl);
-                        }
+
+    if (padding > 0)
+        safe_free(padded_input);
+}
+
+void maxpool2d_fp32_vpu(NNModule *layer, void *input, void *output)
+{
+    // Limitations: NHWC layout, square kernel/stride/padding, batch=1.
+    int outH = layer->outputShape.H;
+    int outW = layer->outputShape.W;
+    int inW  = layer->inputShape.W;
+    int inC  = layer->inputShape.C;
+    int poolSize = layer->params.pool2d.poolSize;
+    int stride   = layer->params.pool2d.stride;
+    int padding  = layer->params.pool2d.padding;
+
+    int paddedW = inW + 2 * padding;
+    void *padded_input = padded_input_create_nhwc_2d(layer, input);
+
+    const float *in = (const float *)padded_input;
+    float *out = (float *)output;
+    for (int oh = 0, h_start = 0; oh < outH; ++oh, h_start += stride) {
+        for (int ow = 0, w_start = 0; ow < outW; ++ow, w_start += stride) {
+            for (int c = 0; c < inC; ) {
+                size_t vl = __riscv_vsetvl_e32m8(inC - c);
+                vfloat32m8_t vmaxv = __riscv_vfmv_v_f_f32m8(-INFINITY, vl);
+                for (int kh = 0; kh < poolSize; ++kh) {
+                    int h = h_start + kh;
+                    for (int kw = 0; kw < poolSize; ++kw) {
+                        int w = w_start + kw;
+                        const float *ptr = &in[(h * paddedW + w) * inC + c];
+                        vfloat32m8_t vin = __riscv_vle32_v_f32m8(ptr, vl);
+                        vmaxv = __riscv_vfmax_vv_f32m8(vmaxv, vin, vl);
                     }
-                    __riscv_vse8_v_i8m8(&out[(oh * outW + ow) * inC + c], vmaxv, vl);
-                    c += (int)vl;
                 }
+                __riscv_vse32_v_f32m8(&out[(oh * outW + ow) * inC + c], vmaxv, vl);
+                c += (int)vl;
             }
         }
-        break;
-    }
-    default:
-        printf("Unsupported dtype in maxpool2d_vpu\n");
-        exit(EXIT_FAILURE);
     }
 
     if (padding > 0)
@@ -589,7 +601,56 @@ void maxpool2d_vpu(NNModule *layer, void *input, void *output)
 }
 
 // Input: NHWC (N=1, H=inH, W=inW, C=inC) padded if needed; Output: NHWC.
-void avgpool2d_vpu(NNModule *layer, void *input, void *output)
+void avgpool2d_int8_vpu(NNModule *layer, void *input, void *output)
+{
+    // Limitations: NHWC layout, square kernel/stride/padding, batch=1.
+    int outH = layer->outputShape.H;
+    int outW = layer->outputShape.W;
+    int inW  = layer->inputShape.W;
+    int inC  = layer->inputShape.C;
+    int poolSize = layer->params.pool2d.poolSize;
+    int stride   = layer->params.pool2d.stride;
+    int padding  = layer->params.pool2d.padding;
+
+    int paddedW = inW + 2 * padding;
+    void *padded_input = padded_input_create_nhwc_2d(layer, input);
+    int window_elems = poolSize * poolSize;
+
+    const int8_t *in = (const int8_t *)padded_input;
+    int8_t *out = (int8_t *)output;
+    for (int oh = 0, h_start = 0; oh < outH; ++oh, h_start += stride) {
+        for (int ow = 0, w_start = 0; ow < outW; ++ow, w_start += stride) {
+            for (int c = 0; c < inC; ) {
+                size_t vl = __riscv_vsetvl_e8m4(inC - c);
+                vint16m8_t vsum = __riscv_vmv_v_x_i16m8(0, vl);
+                const int8_t *row_ptr = &in[(h_start * paddedW + w_start) * inC + c];
+                for (int kh = 0; kh < poolSize; ++kh) {
+                    const int8_t *row = row_ptr + kh * paddedW * inC;
+                    for (int kw = 0; kw < poolSize; ++kw) {
+                        const int8_t *ptr = row + kw * inC;
+                        vint8m4_t vin8 = __riscv_vle8_v_i8m4(ptr, vl);
+                        vint16m8_t vin16 = __riscv_vsext_vf2_i16m8(vin8, vl);
+                        vsum = __riscv_vadd_vv_i16m8(vsum, vin16, vl);
+                    }
+                }
+
+                if (window_elems > 0) {
+                    vsum = __riscv_vdiv_vx_i16m8(vsum, window_elems, vl);
+                }
+                vsum = __riscv_vmax_vx_i16m8(vsum, INT8_MIN, vl);
+                vsum = __riscv_vmin_vx_i16m8(vsum, INT8_MAX, vl);
+                vint8m4_t vout = __riscv_vncvt_x_x_w_i8m4(vsum, vl);
+                __riscv_vse8_v_i8m4(&out[(oh * outW + ow) * inC + c], vout, vl);
+                c += (int)vl;
+            }
+        }
+    }
+    
+    if (padding > 0)
+        safe_free(padded_input);
+}
+
+void avgpool2d_fp32_vpu(NNModule *layer, void *input, void *output)
 {
     // Limitations: NHWC layout, square kernel/stride/padding, batch=1.
     int outH = layer->outputShape.H;
@@ -605,80 +666,40 @@ void avgpool2d_vpu(NNModule *layer, void *input, void *output)
     void *padded_input = padded_input_create_nhwc_2d(layer, input);
     int window_elems = poolSize * poolSize;
 
-    switch (dtype) {
-    case ELEM_FLOAT32: {
-        const float *in = (const float *)padded_input;
-        float *out = (float *)output;
-        for (int oh = 0, h_start = 0; oh < outH; ++oh, h_start += stride) {
-            for (int ow = 0, w_start = 0; ow < outW; ++ow, w_start += stride) {
-                for (int c = 0; c < inC; ) {
-                    size_t vl = __riscv_vsetvl_e32m8(inC - c);
-                    vfloat32m8_t vsum = __riscv_vfmv_v_f_f32m8(0.0f, vl);
+    const float *in = (const float *)padded_input;
+    float *out = (float *)output;
+    for (int oh = 0, h_start = 0; oh < outH; ++oh, h_start += stride) {
+        for (int ow = 0, w_start = 0; ow < outW; ++ow, w_start += stride) {
+            for (int c = 0; c < inC; ) {
+                size_t vl = __riscv_vsetvl_e32m8(inC - c);
+                vfloat32m8_t vsum = __riscv_vfmv_v_f_f32m8(0.0f, vl);
 
-                    const float *row_ptr = &in[(h_start * paddedW + w_start) * inC + c];
-                    for (int kh = 0; kh < poolSize; ++kh) {
-                        const float *row = row_ptr + kh * paddedW * inC;
-                        for (int kw = 0; kw < poolSize; ++kw) {
-                            const float *ptr = row + kw * inC;
-                            vfloat32m8_t vin = __riscv_vle32_v_f32m8(ptr, vl);
-                            vsum = __riscv_vfadd_vv_f32m8(vsum, vin, vl);
-                        }
+                const float *row_ptr = &in[(h_start * paddedW + w_start) * inC + c];
+                for (int kh = 0; kh < poolSize; ++kh) {
+                    const float *row = row_ptr + kh * paddedW * inC;
+                    for (int kw = 0; kw < poolSize; ++kw) {
+                        const float *ptr = row + kw * inC;
+                        vfloat32m8_t vin = __riscv_vle32_v_f32m8(ptr, vl);
+                        vsum = __riscv_vfadd_vv_f32m8(vsum, vin, vl);
                     }
-
-                    if (window_elems > 0) {
-                        float inv = 1.0f / (float)window_elems;
-                        vsum = __riscv_vfmul_vf_f32m8(vsum, inv, vl);
-                    }
-
-                    __riscv_vse32_v_f32m8(&out[(oh * outW + ow) * inC + c], vsum, vl);
-                    c += (int)vl;
                 }
+
+                if (window_elems > 0) {
+                    float inv = 1.0f / (float)window_elems;
+                    vsum = __riscv_vfmul_vf_f32m8(vsum, inv, vl);
+                }
+
+                __riscv_vse32_v_f32m8(&out[(oh * outW + ow) * inC + c], vsum, vl);
+                c += (int)vl;
             }
         }
-        break;
-    }
-    case ELEM_INT8: {
-        const int8_t *in = (const int8_t *)padded_input;
-        int8_t *out = (int8_t *)output;
-        for (int oh = 0, h_start = 0; oh < outH; ++oh, h_start += stride) {
-            for (int ow = 0, w_start = 0; ow < outW; ++ow, w_start += stride) {
-                for (int c = 0; c < inC; ) {
-                    size_t vl = __riscv_vsetvl_e8m4(inC - c);
-                    vint16m8_t vsum = __riscv_vmv_v_x_i16m8(0, vl);
-                    const int8_t *row_ptr = &in[(h_start * paddedW + w_start) * inC + c];
-                    for (int kh = 0; kh < poolSize; ++kh) {
-                        const int8_t *row = row_ptr + kh * paddedW * inC;
-                        for (int kw = 0; kw < poolSize; ++kw) {
-                            const int8_t *ptr = row + kw * inC;
-                            vint8m4_t vin8 = __riscv_vle8_v_i8m4(ptr, vl);
-                            vint16m8_t vin16 = __riscv_vsext_vf2_i16m8(vin8, vl);
-                            vsum = __riscv_vadd_vv_i16m8(vsum, vin16, vl);
-                        }
-                    }
-
-                    if (window_elems > 0) {
-                        vsum = __riscv_vdiv_vx_i16m8(vsum, window_elems, vl);
-                    }
-                    vsum = __riscv_vmax_vx_i16m8(vsum, INT8_MIN, vl);
-                    vsum = __riscv_vmin_vx_i16m8(vsum, INT8_MAX, vl);
-                    vint8m4_t vout = __riscv_vncvt_x_x_w_i8m4(vsum, vl);
-                    __riscv_vse8_v_i8m4(&out[(oh * outW + ow) * inC + c], vout, vl);
-                    c += (int)vl;
-                }
-            }
-        }
-        break;
-    }
-    default:
-        printf("Unsupported dtype in avgpool2d_vpu\n");
-        exit(EXIT_FAILURE);
     }
 
     if (padding > 0)
         safe_free(padded_input);
 }
 
-void AdaptiveAvgPool2d_vpu(NNModule *layer, void *input, void *output)
+void AdaptiveAvgPool2d_int8_vpu(NNModule *layer, void *input, void *output)
 {
     // Limitations: NHWC layout, batch=1.
     int outH = layer->outputShape.H;
@@ -686,248 +707,208 @@ void AdaptiveAvgPool2d_vpu(NNModule *layer, void *input, void *output)
     int inH  = layer->inputShape.H;
     int inW  = layer->inputShape.W;
     int inC  = layer->inputShape.C;
-    elem_type dtype   = layer->dtype;
 
-    switch (dtype) {
-    case ELEM_FLOAT32: {
-        const float *in = (const float *)input;
-        float *out = (float *)output;
-        for (int oh = 0; oh < outH; ++oh) {
-            int h_start = (oh * inH) / outH;
-            int h_end = ((oh + 1) * inH) / outH;
-            for (int ow = 0; ow < outW; ++ow) {
-                int w_start = (ow * inW) / outW;
-                int w_end = ((ow + 1) * inW) / outW;
-                for (int c = 0; c < inC; ++c) {
-                    float sum = 0.0f;
-                    int count = 0;
-                    for (int h = h_start; h < h_end; ++h) {
-                        for (int w = w_start; w < w_end; ++w) {
-                            sum += in[(h * inW + w) * inC + c];
-                            count++;
-                        }
+    const int8_t *in = (const int8_t *)input;
+    int8_t *out = (int8_t *)output;
+    for (int oh = 0; oh < outH; ++oh) {
+        int h_start = (oh * inH) / outH;
+        int h_end = ((oh + 1) * inH) / outH;
+        for (int ow = 0; ow < outW; ++ow) {
+            int w_start = (ow * inW) / outW;
+            int w_end = ((ow + 1) * inW) / outW;
+            for (int c = 0; c < inC; ++c) {
+                int32_t sum = 0;
+                int count = 0;
+                for (int h = h_start; h < h_end; ++h) {
+                    for (int w = w_start; w < w_end; ++w) {
+                        sum += in[(h * inW + w) * inC + c];
+                        count++;
                     }
-                    out[(oh * outW + ow) * inC + c] = (count > 0) ? sum / count : 0.0f;
                 }
+                out[(oh * outW + ow) * inC + c] = (count > 0) ? (int8_t)(sum / count) : 0;
             }
         }
-        break;
-    }
-    case ELEM_INT8: {
-        const int8_t *in = (const int8_t *)input;
-        int8_t *out = (int8_t *)output;
-        for (int oh = 0; oh < outH; ++oh) {
-            int h_start = (oh * inH) / outH;
-            int h_end = ((oh + 1) * inH) / outH;
-            for (int ow = 0; ow < outW; ++ow) {
-                int w_start = (ow * inW) / outW;
-                int w_end = ((ow + 1) * inW) / outW;
-                for (int c = 0; c < inC; ++c) {
-                    int32_t sum = 0;
-                    int count = 0;
-                    for (int h = h_start; h < h_end; ++h) {
-                        for (int w = w_start; w < w_end; ++w) {
-                            sum += in[(h * inW + w) * inC + c];
-                            count++;
-                        }
-                    }
-                    out[(oh * outW + ow) * inC + c] = (count > 0) ? (int8_t)(sum / count) : 0;
-                }
-            }
-        }
-        break;
-    }
-    default:
-        printf("Unsupported dtype in AdaptiveAvgPool2d_vpu\n");
-        exit(EXIT_FAILURE);
     }
 }
 
-void fullyconnected_vpu(NNModule *layer, void *input, void *output)
+void AdaptiveAvgPool2d_fp32_vpu(NNModule *layer, void *input, void *output)
+{
+    // Limitations: NHWC layout, batch=1.
+    int outH = layer->outputShape.H;
+    int outW = layer->outputShape.W;
+    int inH  = layer->inputShape.H;
+    int inW  = layer->inputShape.W;
+    int inC  = layer->inputShape.C;
+
+    const float *in = (const float *)input;
+    float *out = (float *)output;
+
+    for (int oh = 0; oh < outH; ++oh) {
+        int h_start = (oh * inH) / outH;
+        int h_end = ((oh + 1) * inH) / outH;
+        for (int ow = 0; ow < outW; ++ow) {
+            int w_start = (ow * inW) / outW;
+            int w_end = ((ow + 1) * inW) / outW;
+            for (int c = 0; c < inC; ++c) {
+                float sum = 0.0f;
+                int count = 0;
+                for (int h = h_start; h < h_end; ++h) {
+                    for (int w = w_start; w < w_end; ++w) {
+                        sum += in[(h * inW + w) * inC + c];
+                        count++;
+                    }
+                }
+                out[(oh * outW + ow) * inC + c] = (count > 0) ? sum / count : 0.0f;
+            }
+        }
+    }
+}
+
+void fullyconnected_int8_vpu(NNModule *layer, void *input, void *output)
 {
     // Input: 1D vector length inDim (W* C), Output: length outW; both contiguous.
     int inDim  = layer->inputShape.W * layer->inputShape.C;
     int outW = layer->outputShape.W; // FC 輸出展平成一維
     ActivationType act = layer->activation;
 
-    // 轉置權重為 (inDim, outW) 佈局，方便以「輸出通道」為向量方向做載入
-    switch (layer->dtype) {
-        case ELEM_FLOAT32: {
-            const float *input_f32 = (const float*)input;
-            float *output_f32 = (float*)output;
-            const float *weights_f32 = (const float*)layer->params.fc.weights;
-            const float *bias_f32 = (const float*)layer->params.fc.bias;
+    const int8_t *input_i8 = (const int8_t*)input;
+    int8_t *output_i8 = (int8_t*)output;
+    const int8_t *weight_i8 = (const int8_t*)layer->params.fc.weights;
+    const int32_t *bias_i32 = (const int32_t*)layer->params.fc.bias;
+    const float *M = (const float *)layer->params.fc.M;
+    const int32_t *Z = (const int32_t *)layer->params.fc.zps; // zero point
+    const int8_t *wt_T = (const int8_t *)layer->params.fc.weights_rvv;
 
-            const float *wt_T = (const float *)layer->params.fc.weights_rvv;
-            if (!wt_T) {
-                // 後備路徑：若未預先重排，現場轉置一次
-                float *tmp = (float *)safe_malloc(inDim * outW * sizeof(float));
-                for (int o = 0; o < outW; ++o)
-                    for (int i = 0; i < inDim; ++i)
-                        tmp[i * outW + o] = weights_f32[o * inDim + i];
-                wt_T = tmp;
-            }
+    int32_t *acc_buffer = (int32_t *)layer->params.fc.acc_buffer; // 預先配置的 FC 累加暫存
+    if (!acc_buffer)
+        acc_buffer = (int32_t *)safe_malloc(outW * sizeof(int32_t));
 
-            for (int o = 0; o < outW; ) {
-                size_t vl = __riscv_vsetvl_e32m8(outW - o);
-                vfloat32m8_t vacc = __riscv_vle32_v_f32m8(&bias_f32[o], vl);
+    for (int o = 0; o < outW; ) {
+        size_t vl = __riscv_vsetvl_e8m2(outW - o);
+        vint32m8_t vacc = __riscv_vmv_v_x_i32m8(0, vl);
 
-                for (int i = 0; i < inDim; ++i) {
-                    float inval = input_f32[i];
-                    if (inval == 0.0f)
-                        continue;
-                    const float *wt_ptr = &wt_T[i * outW + o];
-                    vfloat32m8_t vwt = __riscv_vle32_v_f32m8(wt_ptr, vl);
-                    vacc = __riscv_vfmacc_vf_f32m8(vacc, inval, vwt, vl);
-                }
-
-                __riscv_vse32_v_f32m8(&output_f32[o], vacc, vl);
-                o += vl;
-            }
-
-            activate_store_rvv_f32(output_f32, output_f32, outW, act);
-
-            if (wt_T != (const float *)layer->params.fc.weights_rvv)
-                safe_free((void *)wt_T);
-            break;
+        for (int i = 0; i < inDim; ++i) {
+            int8_t inval = input_i8[i];
+            if (inval == 0) continue;
+            const int8_t *wt_ptr = &wt_T[i * outW + o];
+            vint8m2_t vrow8 = __riscv_vmv_v_x_i8m2(inval, vl);
+            vint8m2_t vwt8  = __riscv_vle8_v_i8m2(wt_ptr, vl);
+            vint16m4_t vrow16 = __riscv_vsext_vf2_i16m4(vrow8, vl);
+            vint16m4_t vwt16  = __riscv_vsext_vf2_i16m4(vwt8, vl);
+            vacc = __riscv_vwmacc_vv_i32m8(vacc, vrow16, vwt16, vl);
         }
-        case ELEM_INT8: {
-            const int8_t *input_i8 = (const int8_t*)input;
-            int8_t *output_i8 = (int8_t*)output;
-            const int8_t *weight_i8 = (const int8_t*)layer->params.fc.weights;
-            const int32_t *bias_i32 = (const int32_t*)layer->params.fc.bias;
-            const float *M = (const float *)layer->params.fc.M;
-            const int32_t *Z = (const int32_t *)layer->params.fc.zps; // zero point
 
-            if (act == SOFTMAX)
-                printf("Warning: INT8 FC softmax not implemented in RVV path.\n");
-
-            const int8_t *wt_T = (const int8_t *)layer->params.fc.weights_rvv;
-            if (!wt_T) {
-                int8_t *tmp = (int8_t *)safe_malloc(inDim * outW * sizeof(int8_t));
-                for (int o = 0; o < outW; ++o)
-                    for (int i = 0; i < inDim; ++i)
-                        tmp[i * outW + o] = weight_i8[o * inDim + i];
-                wt_T = tmp;
-            }
-
-            int32_t *acc_buffer = (int32_t *)layer->params.fc.acc_buffer; // 預先配置的 FC 累加暫存
-            if (!acc_buffer)
-                acc_buffer = (int32_t *)safe_malloc(outW * sizeof(int32_t));
-
-            for (int o = 0; o < outW; ) {
-                size_t vl = __riscv_vsetvl_e8m2(outW - o);
-                vint32m8_t vacc = __riscv_vmv_v_x_i32m8(0, vl);
-
-                for (int i = 0; i < inDim; ++i) {
-                    int8_t inval = input_i8[i];
-                    if (inval == 0)
-                        continue;
-                    const int8_t *wt_ptr = &wt_T[i * outW + o];
-                    vint8m2_t vrow8 = __riscv_vmv_v_x_i8m2(inval, vl);
-                    vint8m2_t vwt8  = __riscv_vle8_v_i8m2(wt_ptr, vl);
-                    vint16m4_t vrow16 = __riscv_vsext_vf2_i16m4(vrow8, vl);
-                    vint16m4_t vwt16  = __riscv_vsext_vf2_i16m4(vwt8, vl);
-                    vacc = __riscv_vwmacc_vv_i32m8(vacc, vrow16, vwt16, vl);
-                }
-
-                __riscv_vse32_v_i32m8(&acc_buffer[o], vacc, vl);
-                o += vl;
-            }
-
-            requantize_activate_store_rvv(acc_buffer, bias_i32, M, Z, output_i8, outW, act);
-
-            if (acc_buffer != (int32_t *)layer->params.fc.acc_buffer)
-                safe_free(acc_buffer);
-            if (wt_T != (const int8_t *)layer->params.fc.weights_rvv)
-                safe_free((void *)wt_T);
-            break;
-        }
-        default: 
-            printf("Unsupported dtype in fc_forward\n");
-            exit(EXIT_FAILURE);
+        __riscv_vse32_v_i32m8(&acc_buffer[o], vacc, vl);
+        o += vl;
     }
+
+    requantize_activate_store_rvv(acc_buffer, bias_i32, M, Z, output_i8, outW, act);
 }
 
-void AdaptiveMaxPool1d_vpu(NNModule *layer, void *input, void *output) {
+void fullyconnected_fp32_vpu(NNModule *layer, void *input, void *output)
+{
+    // Input: 1D vector length inDim (W* C), Output: length outW; both contiguous.
+    int inDim  = layer->inputShape.W * layer->inputShape.C;
+    int outW = layer->outputShape.W; // FC 輸出展平成一維
+    ActivationType act = layer->activation;
+
+    const float *input_f32 = (const float*)input;
+    float *output_f32 = (float*)output;
+    const float *weights_f32 = (const float*)layer->params.fc.weights;
+    const float *bias_f32 = (const float*)layer->params.fc.bias;
+
+    const float *wt_T = (const float *)layer->params.fc.weights_rvv;
+
+    for (int o = 0; o < outW; ) {
+        size_t vl = __riscv_vsetvl_e32m8(outW - o);
+        vfloat32m8_t vacc = __riscv_vle32_v_f32m8(&bias_f32[o], vl);
+
+        for (int i = 0; i < inDim; ++i) {
+            float inval = input_f32[i];
+            if (inval == 0.0f) continue;
+            const float *wt_ptr = &wt_T[i * outW + o];
+            vfloat32m8_t vwt = __riscv_vle32_v_f32m8(wt_ptr, vl);
+            vacc = __riscv_vfmacc_vf_f32m8(vacc, inval, vwt, vl);
+        }
+
+        __riscv_vse32_v_f32m8(&output_f32[o], vacc, vl);
+        o += vl;
+    }
+
+    activate_store_rvv_f32(output_f32, output_f32, outW, act);
+}
+
+void AdaptiveMaxPool1d_int8_vpu(NNModule *layer, void *input, void *output) {
     int outW = layer->outputShape.W;
     int inW  = layer->inputShape.W;
     int inC  = layer->inputShape.C;
-    elem_type dtype = layer->dtype;
 
-    switch (dtype) {
-    case ELEM_FLOAT32: {
-        float *in = (float*)input;
-        float *out = (float*)output;
+    const int8_t *in = (const int8_t*)input;
+    int8_t *out = (int8_t*)output;
 
-        // 快速路徑：global pooling
-        if (outW == 1) {
-            for (int c = 0; c < inC; c++) {
-                float max_val = -INFINITY;
-                for (int idx = 0; idx < inW; idx++) {
-                    float v = in[c*inW + idx];
-                    if (v > max_val) max_val = v;
-                }
-                out[c] = max_val;
-            }
-            break;
-        }
-
-        // 一般 adaptive pooling
+    if (outW == 1) { // global pooling
         for (int c = 0; c < inC; c++) {
-            for (int pos = 0; pos < outW; pos++) {
-                int start = (pos * inW) / outW;
-                int end   = ((pos + 1) * inW) / outW;
-                if (end > inW) end = inW;
-
-                float value = -INFINITY;
-                for (int idx = start; idx < end; idx++) {
-                    float v = in[c*inW + idx];
-                    if (v > value) value = v;
-                }
-                out[c*outW + pos] = value;
+            int8_t max_val = INT8_MIN;
+            for (int idx = 0; idx < inW; idx++) {
+                int8_t v = in[c*inW + idx];
+                if (v > max_val) max_val = v;
             }
+            out[c] = max_val;
         }
-        break;
+        return;
     }
 
-    case ELEM_INT8: {
-        const int8_t *in = (const int8_t*)input;
-        int8_t *out = (int8_t*)output;
-        // 快速路徑：global pooling
-        if (outW == 1) {
-            for (int c = 0; c < inC; c++) {
-                int8_t max_val = INT8_MIN;
-                for (int idx = 0; idx < inW; idx++) {
-                    int8_t v = in[c*inW + idx];
-                    if (v > max_val) max_val = v;
-                }
-                out[c] = max_val;
-            }
-            break;
-        }
+    // 一般 adaptive pooling
+    for (int c = 0; c < inC; c++) {
+        for (int pos = 0; pos < outW; pos++) {
+            int start = (pos * inW) / outW;
+            int end   = ((pos + 1) * inW) / outW;
+            if (end > inW) end = inW;
 
-        // 一般 adaptive pooling
+            int8_t value = INT8_MIN;
+            for (int idx = start; idx < end; idx++) {
+                int8_t v = in[c*inW + idx];
+                if (v > value) value = v;
+            }
+            out[c*outW + pos] = value;
+        }
+    }
+}
+
+void AdaptiveMaxPool1d_fp32_vpu(NNModule *layer, void *input, void *output) {
+    int outW = layer->outputShape.W;
+    int inW  = layer->inputShape.W;
+    int inC  = layer->inputShape.C;
+
+    float *in = (float*)input;
+    float *out = (float*)output;
+
+    if (outW == 1) { // global pooling
         for (int c = 0; c < inC; c++) {
-            for (int pos = 0; pos < outW; pos++) {
-                int start = (pos * inW) / outW;
-                int end   = ((pos + 1) * inW) / outW;
-                if (end > inW) end = inW;
-
-                int8_t value = INT8_MIN;
-                for (int idx = start; idx < end; idx++) {
-                    int8_t v = in[c*inW + idx];
-                    if (v > value) value = v;
-                }
-                out[c*outW + pos] = value;
+            float max_val = -INFINITY;
+            for (int idx = 0; idx < inW; idx++) {
+                float v = in[c*inW + idx];
+                if (v > max_val) max_val = v;
             }
+            out[c] = max_val;
         }
-        break;
+        return;
     }
 
-    default:
-        printf("Unsupported dtype in AdaptiveMaxPool1d_forward\n");
-        exit(EXIT_FAILURE);
+    // 一般 adaptive pooling
+    for (int c = 0; c < inC; c++) {
+        for (int pos = 0; pos < outW; pos++) {
+            int start = (pos * inW) / outW;
+            int end   = ((pos + 1) * inW) / outW;
+            if (end > inW) end = inW;
+
+            float value = -INFINITY;
+            for (int idx = start; idx < end; idx++) {
+                float v = in[c*inW + idx];
+                if (v > value) value = v;
+            }
+            out[c*outW + pos] = value;
+        }
     }
 }
 

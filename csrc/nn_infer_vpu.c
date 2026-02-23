@@ -56,27 +56,27 @@ void forward_int8_vpu(CNN *net, void *input)
             break;
         case POOL1D:
             if (currentLayer->params.pool.type == AdaptiveMaxPool1d) {
-                AdaptiveMaxPool1d_vpu(currentLayer, src, dst);
+                AdaptiveMaxPool1d_int8_vpu(currentLayer, src, dst);
             } else if (currentLayer->params.pool.type == MAX_POOL) {
-                maxpool1d_vpu(currentLayer, src, dst);
+                maxpool1d_int8_vpu(currentLayer, src, dst);
             } else {
-                avgpool1d_vpu(currentLayer, src, dst);
+                avgpool1d_int8_vpu(currentLayer, src, dst);
             }
             break;
         case POOL2D:
             if (currentLayer->params.pool2d.type == AdaptiveAvgPool2d) {
-                AdaptiveAvgPool2d_vpu(currentLayer, src, dst);
+                AdaptiveAvgPool2d_int8_vpu(currentLayer, src, dst);
             } else if (currentLayer->params.pool2d.type == MAX_POOL) {
-                maxpool2d_vpu(currentLayer, src, dst);
+                maxpool2d_int8_vpu(currentLayer, src, dst);
             } else {
-                avgpool2d_vpu(currentLayer, src, dst);
+                avgpool2d_int8_vpu(currentLayer, src, dst);
             }
             break;
         case TRANSPOSE:
             transpose_vpu(currentLayer, src, dst);
             break;
         case FC:
-            fullyconnected_vpu(currentLayer, src, dst);
+            fullyconnected_int8_vpu(currentLayer, src, dst);
             break;
         case RES_SAVE:
             save_vpu(currentLayer, src, dst);
@@ -86,7 +86,7 @@ void forward_int8_vpu(CNN *net, void *input)
             break;
         }
 
-        dump_layer_logits_i8(currentLayer, layer_idx, dst);
+        //dump_layer_logits_i8(currentLayer, layer_idx, dst);
 
         void *tmp = src;
         src = dst;
@@ -126,27 +126,27 @@ void forward_fp32_vpu(CNN *net, void *input)
         case POOL1D:
             
             if (currentLayer->params.pool.type == AdaptiveMaxPool1d) {
-                AdaptiveMaxPool1d_vpu(currentLayer, src, dst);
+                AdaptiveMaxPool1d_fp32_vpu(currentLayer, src, dst);
             } else if (currentLayer->params.pool.type == MAX_POOL) {
-                maxpool1d_vpu(currentLayer, src, dst);
+                maxpool1d_fp32_vpu(currentLayer, src, dst);
             } else {
-                avgpool1d_vpu(currentLayer, src, dst);
+                avgpool1d_fp32_vpu(currentLayer, src, dst);
             }
             break;
         case POOL2D:
             if (currentLayer->params.pool2d.type == AdaptiveAvgPool2d) {
-                AdaptiveAvgPool2d_vpu(currentLayer, src, dst);
+                AdaptiveAvgPool2d_fp32_vpu(currentLayer, src, dst);
             } else if (currentLayer->params.pool2d.type == MAX_POOL) {
-                maxpool2d_vpu(currentLayer, src, dst);
+                maxpool2d_fp32_vpu(currentLayer, src, dst);
             } else {
-                avgpool2d_vpu(currentLayer, src, dst);
+                avgpool2d_fp32_vpu(currentLayer, src, dst);
             }
             break;
         case TRANSPOSE:
             transpose_vpu(currentLayer, src, dst);
             break;
         case FC:
-            fullyconnected_vpu(currentLayer, src, dst);
+            fullyconnected_fp32_vpu(currentLayer, src, dst);
             break;
         case RES_SAVE:
             save_vpu(currentLayer, src, dst);
