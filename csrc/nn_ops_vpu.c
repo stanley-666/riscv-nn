@@ -87,6 +87,7 @@ void requantize_activate_store_rvv(const int32_t *src,
         printf("Sigmoid activation not implemented in requantize_activate_store_rvv.\n");
         exit(EXIT_FAILURE);
     }
+
     for (int i = 0; i < len; ++i) {
         int32_t acc = src[i] + bias[i];
         int8_t rq = requantize_int8(acc, scale[i], zp[i]);
@@ -1076,8 +1077,6 @@ void add_vpu(NNModule *layer, void *input, void *output)
         exit(EXIT_FAILURE);
     }
 }
-
-
 
 /*
 Copyright (c) 2025, MC2 Lab, National Taiwan Normal University.All rights reserved.

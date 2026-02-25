@@ -85,54 +85,51 @@ void *padded_input_create_nchw(NNModule *layer, const void *input) {
     int inW = layer->inputShape.W;
     int inC = layer->inputShape.C;
     int padding = layer->params.conv.padding;
+    if (padding == 0)
+        return (void *)input;
     elem_type dtype = layer->dtype;
 
     // 1d padding
     int paddedW = inW + 2 * padding;
-    void *padded_input = NULL;
-    if (padding > 0) {
-        size_t total_size = sizeof_dtype(dtype) * inC * paddedW;
-        padded_input = safe_malloc(total_size);
+    size_t total_size = sizeof_dtype(dtype) * inC * paddedW;
+    void *padded_input = safe_malloc(total_size);
 
-        switch (dtype) {
-            case ELEM_FLOAT32: {
-                float *dst = (float *)padded_input;
-                float *src = (float *)input;
+    switch (dtype) {
+        case ELEM_FLOAT32: {
+            float *dst = (float *)padded_input;
+            float *src = (float *)input;
 
-                for (int ic = 0; ic < inC; ic++) {
-                    float *dst_c = &dst[ic * paddedW];
-                    float *src_c = &src[ic * inW];
+            for (int ic = 0; ic < inC; ic++) {
+                float *dst_c = &dst[ic * paddedW];
+                float *src_c = &src[ic * inW];
 
                     memset(dst_c, 0, padding * sizeof(float));               // 左 padding
                     memcpy(dst_c + padding, src_c, inW * sizeof(float));     // 原始輸入
                     memset(dst_c + padding + inW, 0, padding * sizeof(float)); // 右 padding
-                }
-                break;
             }
+            break;
+        }
 
-            case ELEM_INT8: {
-                int8_t *dst = (int8_t *)padded_input;
-                int8_t *src = (int8_t *)input;
+        case ELEM_INT8: {
+            int8_t *dst = (int8_t *)padded_input;
+            int8_t *src = (int8_t *)input;
 
-                for (int ic = 0; ic < inC; ic++) {
-                    int8_t *dst_c = &dst[ic * paddedW];
-                    int8_t *src_c = &src[ic * inW];
+            for (int ic = 0; ic < inC; ic++) {
+                int8_t *dst_c = &dst[ic * paddedW];
+                int8_t *src_c = &src[ic * inW];
 
-                    memset(dst_c, 0, padding * sizeof(int8_t));             // 左 padding
-                    memcpy(dst_c + padding, src_c, inW * sizeof(int8_t));   // 原始輸入
-                    memset(dst_c + padding + inW, 0, padding * sizeof(int8_t)); // 右 padding
-                }
-                break;
+                memset(dst_c, 0, padding * sizeof(int8_t));             // 左 padding
+                memcpy(dst_c + padding, src_c, inW * sizeof(int8_t));   // 原始輸入
+                memset(dst_c + padding + inW, 0, padding * sizeof(int8_t)); // 右 padding
             }
+            break;
+        }
 
-            default:
-                printf("Unsupported dtype in padding\n");
-                exit(EXIT_FAILURE);
-            }
-    } else {
-        padded_input = (void *)input;  // original input without padding
+        default: {
+            printf("Unsupported dtype in padding\n");
+            exit(EXIT_FAILURE);
+        }
     }
-
     return padded_input;
 }
 
@@ -140,9 +137,10 @@ void *padded_input_create_nhwc(NNModule *layer, const void *input) {
     int inW = layer->inputShape.W;
     int inC = layer->inputShape.C;
     int padding = layer->params.conv.padding;
+    if (padding == 0)
+        return (void *)input;
     elem_type dtype = layer->dtype;
     int paddedW = inW + 2 * padding;
-
     void *padded_input = safe_malloc(sizeof_dtype(dtype) * paddedW * inC);
 
     switch (dtype) {

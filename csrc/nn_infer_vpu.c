@@ -108,7 +108,6 @@ void forward_fp32_vpu(CNN *net, void *input)
     int layer_idx = 0;
     while (currentLayer != NULL)
     {    
-        //clock_t t0 = clock();
         int skip_swap = 0;
         switch (currentLayer->type)
         {
@@ -156,10 +155,6 @@ void forward_fp32_vpu(CNN *net, void *input)
             add_vpu(currentLayer, src, dst);
             break;
         }
-
-        //clock_t t1 = clock();
-        //double ms = ts_diff_ms(t0, t1);
-        //printf("[rvv_f32] layer %d type=%s time=%.3f ms\n", layer_idx, layer_type_name(currentLayer->type), ms);
         layer_idx++;
 
         if (!skip_swap) {
