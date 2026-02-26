@@ -529,7 +529,6 @@ void avgpool2d_fp32_vpu(NNModule *layer, void *input, void *output)
     int poolSize = layer->params.pool2d.poolSize;
     int stride   = layer->params.pool2d.stride;
     int padding  = layer->params.pool2d.padding;
-    elem_type dtype   = layer->dtype;
 
     int paddedW = inW + 2 * padding;
     void *padded_input = padded_input_create_nhwc_2d(layer, input);
@@ -682,7 +681,7 @@ void fullyconnected_fp32_vpu(NNModule *layer, void *input, void *output)
 
     const float *input_f32 = (const float*)input;
     float *output_f32 = (float*)output;
-    const float *weights_f32 = (const float*)layer->params.fc.weights;
+    //const float *weights_f32 = (const float*)layer->params.fc.weights;
     const float *bias_f32 = (const float*)layer->params.fc.bias;
 
     const float *wt_T = (const float *)layer->params.fc.weights_rvv;
@@ -722,7 +721,6 @@ void AdaptiveMaxPool1d_wc_int8_vpu(NNModule *layer, void *input, void *output)
             end = inW;
         }
 
-        int8_t *out_ptr = &output[pos * inC];
         for (int c = 0; c < inC; ) {
             size_t vl = __riscv_vsetvl_e8m8(inC - c);
             vint8m8_t vmax = __riscv_vmv_v_x_i8m8(INT8_MIN, vl);
@@ -755,7 +753,6 @@ void AdaptiveMaxPool1d_wc_fp32_vpu(NNModule *layer, void *input, void *output)
             end = inW;
         }
 
-        float *out_ptr = &output_f32[pos * inC];
         for (int c = 0; c < inC; ) {
             size_t vl = __riscv_vsetvl_e32m8(inC - c);
             vfloat32m8_t vmax = __riscv_vfmv_v_f_f32m8(-INFINITY, vl);
