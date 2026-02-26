@@ -1,60 +1,13 @@
 #include "nn_layer.h"
 #include "nn_utils.h"
-#include "nn_activation.h"
+#include "nn_activation_int.h"
+#include "nn_activation_fp.h"
 
 #include "nn_ops_vpu.h"
 #include <time.h>
 
 #define VLEN (__riscv_vlenb() * 8) // Get CSR VLEN Bits
 
-void activate_store_rvv_f32(float *dst,
-                            const float *src,
-                            int len,
-                            ActivationType act)
-{
-
-    if (act == RELU) {
-        for (int i = 0; i < len; ) {
-            size_t vl = __riscv_vsetvl_e32m8(len - i);
-            vfloat32m8_t vdata = __riscv_vle32_v_f32m8(&src[i], vl);
-            vdata = __riscv_vfmax_vf_f32m8(vdata, 0.0f, vl);
-            __riscv_vse32_v_f32m8(&dst[i], vdata, vl);
-            i += vl;
-        }
-        return;
-    }
-
-    else if (act == SOFTMAX) {
-        softmax_f32(src, dst, len);
-        return;
-    }
-
-    else if (act == NONE) { // only store
-        for (int i = 0; i < len; ) {
-            size_t vl = __riscv_vsetvl_e32m8(len - i);
-            vfloat32m8_t vdata = __riscv_vle32_v_f32m8(&src[i], vl);
-            __riscv_vse32_v_f32m8(&dst[i], vdata, vl);
-            i += vl;
-        }
-        return;
-    }
-    else if (act == LEAKY_RELU) {
-        for (int i = 0; i < len; ) {
-            size_t vl = __riscv_vsetvl_e32m4(len - i);
-            vfloat32m4_t vdata = __riscv_vle32_v_f32m4(&src[i], vl);
-            vfloat32m4_t vslope = __riscv_vfmv_v_f_f32m4(0.01f, vl);
-            vfloat32m4_t vscaled = __riscv_vfmul_vv_f32m4(vdata, vslope, vl);
-            vbool8_t mask = __riscv_vmflt_vf_f32m4_b8(vdata, 0.0f, vl);
-            vdata = __riscv_vmerge_vvm_f32m4(vdata, vscaled, mask, vl);
-            __riscv_vse32_v_f32m4(&dst[i], vdata, vl);
-            i += vl;
-        }
-        return;
-    }
-
-    for (int i = 0; i < len; ++i)
-        dst[i] = activate_f32(src[i], act);
-}
 /*
 RVV implementation of 1D CNN layers
 
@@ -751,6 +704,39 @@ void fullyconnected_fp32_vpu(NNModule *layer, void *input, void *output)
     }
 
     activate_store_rvv_f32(output_f32, output_f32, outW, act);
+}
+
+void AdaptiveMaxPool1d_wc_int8_vpu(NNModule *layer, void *input, void *output)
+{
+    const int8_t *input_i8 = (const int8_t *)input;
+    int8_t *output_i8 = (int8_t *)output;
+    int inW= layer->inputShape.W;
+    int inC= layer->inputShape.C;
+    int outW= layer->outputShape.W;
+    
+    // Input/Output: N=1,H=1; layout [W][C]. Output W pooled.
+    for (int pos = 0; pos < outW; ++pos) {
+        int start = (pos * inW) / outW;
+        int end = ((pos + 1) * inW) / outW;
+        if (end > inW) {
+            end = inW;
+        }
+
+        int8_t *out_ptr = &output[pos * inC];
+        for (int c = 0; c < inC; ) {
+            size_t vl = __riscv_vsetvl_e8m8(inC - c);
+            vint8m8_t vmax = __riscv_vmv_v_x_i8m8(INT8_MIN, vl);
+
+            for (int w = start; w < end; ++w) {
+                const int8_t *in_ptr = &input_i8[w * inC + c];
+                vint8m8_t vin = __riscv_vle8_v_i8m8(in_ptr, vl);
+                vmax = __riscv_vmax_vv_i8m8(vmax, vin, vl);
+            }
+
+            __riscv_vse8_v_i8m8(&output_i8[c], vmax, vl);
+            c += (int)vl;
+        }
+    }
 }
 
 void AdaptiveMaxPool1d_int8_vpu(NNModule *layer, void *input, void *output) {

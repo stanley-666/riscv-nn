@@ -1,5 +1,5 @@
-#ifndef _NN_ACTIVATION_H_
-#define _NN_ACTIVATION_H_
+#ifndef _NN_ACTIVATION_INT_H_
+#define _NN_ACTIVATION_INT_H_
 
 #include "nn_param.h"
 #include <riscv_vector.h>

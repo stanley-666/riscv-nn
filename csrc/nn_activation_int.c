@@ -1,8 +1,10 @@
-#include "nn_activation.h"
+#include "nn_activation_int.h"
 #include "nn_utils.h"
 
 #include <stdio.h>
 #include <stdlib.h>
+
+// requantize activation kernels for post-processing int32 accumulators into int8 outputs with activation functions fused in.
 
 enum { ACTIVATION_KERNEL_COUNT = 6 };
 

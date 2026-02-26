@@ -2,12 +2,11 @@
 #define _NN_OPS_VPU_H_
 
 #include "nn_param.h"
-#include "nn_activation.h"
+#include "nn_activation_int.h"
+#include "nn_activation_fp.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <riscv_vector.h>
-/* RVV use NHWC layout */
-void activate_store_rvv_f32(float *dst, const float *src, int len, ActivationType act);
 
 void conv1d_i8_vpu(NNModule *layer, void *input, void *output);
 void conv1d_fp32_vpu(NNModule *layer, void *input, void *output);
@@ -29,6 +28,7 @@ void avgpool2d_fp32_vpu(NNModule *layer, void *input, void *output);
 
 void AdaptiveMaxPool1d_int8_vpu(NNModule *layer, void *input, void *output);
 void AdaptiveMaxPool1d_fp32_vpu(NNModule *layer, void *input, void *output);
+void AdaptiveMaxPool1d_wc_int8_vpu(NNModule *layer, void *input, void *output);
 
 void AdaptiveAvgPool2d_int8_vpu(NNModule *layer, void *input, void *output);
 void AdaptiveAvgPool2d_fp32_vpu(NNModule *layer, void *input, void *output);
