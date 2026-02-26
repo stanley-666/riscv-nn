@@ -1,99 +1,11 @@
 #include "nn_layer.h"
 #include "nn_utils.h"
+#include "nn_activation.h"
 
 #include "nn_ops_vpu.h"
 #include <time.h>
 
 #define VLEN (__riscv_vlenb() * 8) // Get CSR VLEN Bits
-
-void requantize_activate_store_rvv(const int32_t *src,
-                                                 const int32_t *bias,
-                                                 const float *scale,
-                                                 const int32_t *zp,
-                                                 int8_t *dst,
-                                                 int len,
-                                                 ActivationType act)
-{
-    if (act == NONE) { // only store
-        for (int i = 0; i < len; ) {
-            size_t vl = __riscv_vsetvl_e32m8(len - i);
-            vint32m8_t vacc = __riscv_vle32_v_i32m8(&src[i], vl);
-            vint32m8_t vbias = __riscv_vle32_v_i32m8(&bias[i], vl);
-            vacc = __riscv_vadd_vv_i32m8(vacc, vbias, vl);
-
-            vfloat32m8_t vacc_f = __riscv_vfcvt_f_x_v_f32m8(vacc, vl);
-            vfloat32m8_t vscale = __riscv_vle32_v_f32m8(&scale[i], vl);
-            vacc_f = __riscv_vfmul_vv_f32m8(vacc_f, vscale, vl);
-
-            vint32m8_t vround = __riscv_vfcvt_x_f_v_i32m8(vacc_f, vl);
-            vint32m8_t vzp = __riscv_vle32_v_i32m8(&zp[i], vl);
-            vround = __riscv_vadd_vv_i32m8(vround, vzp, vl);
-
-            vround = __riscv_vmax_vx_i32m8(vround, INT8_MIN, vl);
-            vround = __riscv_vmin_vx_i32m8(vround, INT8_MAX, vl);
-
-            vint16m4_t vq16 = __riscv_vncvt_x_x_w_i16m4(vround, vl);
-            vint8m2_t vq8 = __riscv_vncvt_x_x_w_i8m2(vq16, vl);
-            __riscv_vse8_v_i8m2(&dst[i], vq8, vl);
-            i += vl;
-        }
-        return;
-    }
-    
-    else if (act == RELU) {
-        for (int i = 0; i < len; ) {
-            size_t vl = __riscv_vsetvl_e32m8(len - i);
-            vint32m8_t vacc = __riscv_vle32_v_i32m8(&src[i], vl);
-            vint32m8_t vbias = __riscv_vle32_v_i32m8(&bias[i], vl);
-            vacc = __riscv_vadd_vv_i32m8(vacc, vbias, vl);
-
-            vfloat32m8_t vacc_f = __riscv_vfcvt_f_x_v_f32m8(vacc, vl);
-            vfloat32m8_t vscale = __riscv_vle32_v_f32m8(&scale[i], vl);
-            vacc_f = __riscv_vfmul_vv_f32m8(vacc_f, vscale, vl);
-
-            vint32m8_t vround = __riscv_vfcvt_x_f_v_i32m8(vacc_f, vl);
-            vint32m8_t vzp = __riscv_vle32_v_i32m8(&zp[i], vl);
-            vround = __riscv_vadd_vv_i32m8(vround, vzp, vl);
-
-            vround = __riscv_vmax_vx_i32m8(vround, INT8_MIN, vl);
-            vround = __riscv_vmin_vx_i32m8(vround, INT8_MAX, vl);
-
-            vint16m4_t vq16 = __riscv_vncvt_x_x_w_i16m4(vround, vl);
-            vint8m2_t vq8 = __riscv_vncvt_x_x_w_i8m2(vq16, vl);
-
-            vint8m2_t vzero = __riscv_vmv_v_x_i8m2(0, vl);
-            vq8 = __riscv_vmax_vv_i8m2(vq8, vzero, vl);
-  
-            __riscv_vse8_v_i8m2(&dst[i], vq8, vl);
-            i += vl;
-        }
-        return;
-    }
-
-    /*
-    else if(act == LEAKY_RELU) {
-        // to be implemented
-    }
-    */
-
-    else if (act == SOFTMAX) {
-        // to be implemented
-        printf("Softmax activation not implemented in requantize_activate_store_rvv.\n");
-        exit(EXIT_FAILURE);
-    }
-
-    else if (act == SIGMOID) {
-        // to be implemented
-        printf("Sigmoid activation not implemented in requantize_activate_store_rvv.\n");
-        exit(EXIT_FAILURE);
-    }
-
-    for (int i = 0; i < len; ++i) {
-        int32_t acc = src[i] + bias[i];
-        int8_t rq = requantize_int8(acc, scale[i], zp[i]);
-        dst[i] = activate_i8(rq, act);
-    }
-}
 
 void activate_store_rvv_f32(float *dst,
                             const float *src,
@@ -105,8 +17,7 @@ void activate_store_rvv_f32(float *dst,
         for (int i = 0; i < len; ) {
             size_t vl = __riscv_vsetvl_e32m8(len - i);
             vfloat32m8_t vdata = __riscv_vle32_v_f32m8(&src[i], vl);
-            vfloat32m8_t vzero = __riscv_vfmv_v_f_f32m8(0.0f, vl);
-            vdata = __riscv_vfmax_vv_f32m8(vdata, vzero, vl);
+            vdata = __riscv_vfmax_vf_f32m8(vdata, 0.0f, vl);
             __riscv_vse32_v_f32m8(&dst[i], vdata, vl);
             i += vl;
         }
@@ -177,14 +88,14 @@ void conv1d_i8_vpu(NNModule *layer, void *input, void *output)
     for (int pos = 0; pos < outW; ++pos) {
         for (int oc = 0; oc < outC; ) {
             size_t vl = __riscv_vsetvl_e16m4(outC - oc);
-            vint32m8_t vacc = __riscv_vmv_v_x_i32m8(0, vl);
+            vint32m8_t vacc = __riscv_vle32_v_i32m8(&bias_i32[oc], vl);
 
             for (int k = 0; k < filterSize; ++k) {
                 const int8_t *in_ptr = &input_i8[(pos * stride + k) * inC];
                 for (int ic = 0; ic < inC; ++ic) {
                     int8_t inval = in_ptr[ic];
                     if (inval == 0)
-                        continue;
+                        continue;              
                     int col_idx = k * inC + ic;
                     const int16_t *wt = &weight_buffer[col_idx * outC + oc];
                     vint16m4_t vwt16 = __riscv_vle16_v_i16m4(wt, vl);
@@ -197,10 +108,11 @@ void conv1d_i8_vpu(NNModule *layer, void *input, void *output)
         }
 
         int8_t *out_row = &output_i8[pos * outC];
-        requantize_activate_store_rvv(acc_buffer, bias_i32, M, Z, out_row, outC, layer->activation);
+        requantize_activate_store_rvv(acc_buffer, M, Z, out_row, outC, layer->activation);
     }
 
-    safe_free(padded_input);
+    if (layer->params.conv.padding > 0)
+        safe_free(padded_input);
 }
 
 void conv1d_fp32_vpu(NNModule *layer, void *input, void *output)
@@ -251,7 +163,8 @@ void conv1d_fp32_vpu(NNModule *layer, void *input, void *output)
         activate_store_rvv_f32(out_row, acc_buffer, outC, layer->activation);
     }
 
-    safe_free(padded_input);
+    if (layer->params.conv.padding > 0)
+        safe_free(padded_input);
 }
 
 // Input: NHWC (N=1, H=inH, W=inW, C=inC) padded if needed; Output: NHWC.
@@ -312,13 +225,15 @@ void conv2d_int8_vpu(NNModule *layer, void *input, void *output)
                         }
                     }
                 }
+                vint32m8_t vbias = __riscv_vle32_v_i32m8(&bias_i32[oc], vl);
+                vacc = __riscv_vadd_vv_i32m8(vacc, vbias, vl);
 
                 __riscv_vse32_v_i32m8(&acc_buffer[oc], vacc, vl);
                 oc += vl;
             }
 
             int8_t *out_row = &output_i8[(oh * outW + ow) * outC];
-            requantize_activate_store_rvv(acc_buffer, bias_i32, M, Z, out_row, outC, layer->activation);
+            requantize_activate_store_rvv(acc_buffer, M, Z, out_row, outC, layer->activation);
         }
     }
 
@@ -770,15 +685,14 @@ void fullyconnected_int8_vpu(NNModule *layer, void *input, void *output)
     // Input: 1D vector length inDim (W* C), Output: length outW; both contiguous.
     int inDim  = layer->inputShape.W * layer->inputShape.C;
     int outW = layer->outputShape.W; // FC 輸出展平成一維
-    ActivationType act = layer->activation;
 
     const int8_t *input_i8 = (const int8_t*)input;
     int8_t *output_i8 = (int8_t*)output;
-    const int8_t *weight_i8 = (const int8_t*)layer->params.fc.weights;
     const int32_t *bias_i32 = (const int32_t*)layer->params.fc.bias;
     const float *M = (const float *)layer->params.fc.M;
     const int32_t *Z = (const int32_t *)layer->params.fc.zps; // zero point
     const int8_t *wt_T = (const int8_t *)layer->params.fc.weights_rvv;
+    requantize_store_kernel_t rq_kernel = select_requantize_store_kernel(layer->activation);
 
     int32_t *acc_buffer = (int32_t *)layer->params.fc.acc_buffer; // 預先配置的 FC 累加暫存
     if (!acc_buffer)
@@ -792,18 +706,18 @@ void fullyconnected_int8_vpu(NNModule *layer, void *input, void *output)
             int8_t inval = input_i8[i];
             if (inval == 0) continue;
             const int8_t *wt_ptr = &wt_T[i * outW + o];
-            vint8m2_t vrow8 = __riscv_vmv_v_x_i8m2(inval, vl);
-            vint8m2_t vwt8  = __riscv_vle8_v_i8m2(wt_ptr, vl);
-            vint16m4_t vrow16 = __riscv_vsext_vf2_i16m4(vrow8, vl);
-            vint16m4_t vwt16  = __riscv_vsext_vf2_i16m4(vwt8, vl);
-            vacc = __riscv_vwmacc_vv_i32m8(vacc, vrow16, vwt16, vl);
+            vint8m2_t vwt8 = __riscv_vle8_v_i8m2(wt_ptr, vl);
+            vint16m4_t vwt16 = __riscv_vsext_vf2_i16m4(vwt8, vl);
+            vacc = __riscv_vwmacc_vx_i32m8(vacc, inval, vwt16, vl);
         }
+        vint32m8_t vbias = __riscv_vle32_v_i32m8(&bias_i32[o], vl);
+        vacc = __riscv_vadd_vv_i32m8(vacc, vbias, vl);
 
         __riscv_vse32_v_i32m8(&acc_buffer[o], vacc, vl);
         o += vl;
     }
 
-    requantize_activate_store_rvv(acc_buffer, bias_i32, M, Z, output_i8, outW, act);
+    rq_kernel(acc_buffer, M, Z, output_i8, outW);
 }
 
 void fullyconnected_fp32_vpu(NNModule *layer, void *input, void *output)

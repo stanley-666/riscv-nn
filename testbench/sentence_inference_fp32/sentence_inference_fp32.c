@@ -66,17 +66,19 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         double add_layer_elapsed = (double)(add_layer_end - add_layer_start) / CLOCKS_PER_SEC;
         printf("Layer addition time: %.6f seconds\n", add_layer_elapsed);
 
-
         float embedding_f32[384];
         for (int i = 0; i < 384; ++i)
             embedding_f32[i] = (float)random_embedding[i];
         forward_input_bytes = 384 * sizeof(float);
 
         clock_t start_time = clock();
+        uint64_t start_cycle = read_rdcycle();
         forward_fp32_vpu(model, (void*)embedding_f32);
+        uint64_t end_cycle = read_rdcycle();
         clock_t end_time = clock();
         float *output = (float *)((model->numModules % 2 == 0) ? buffer1 : buffer2); // 根據層數判斷最終輸出所在的 ping-pong buffer
         double elapsed_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
+         printf("Inference time: %lu cycles\n", end_cycle - start_cycle);
         printf("Inference time: %.6f seconds\n", elapsed_time);
 
         // print output
