@@ -43,7 +43,7 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         NNModule *conv1 = nn_Conv1d(1, 384, 5, 64, 1, 2, RELU, conv1_weight, conv1_bias, NULL, NULL, ELEM_FLOAT32);
         NNModule *conv2 = nn_Conv1d(64, conv1->outputShape.W, 5, 128, 1, 2, RELU, conv2_weight, conv2_bias, NULL, NULL, ELEM_FLOAT32);
         NNModule *conv3 = nn_Conv1d(128, conv2->outputShape.W, 3, 256, 1, 1, RELU, conv3_weight, conv3_bias, NULL, NULL, ELEM_FLOAT32);
-        NNModule *transposed_conv3 = nn_Transpose(conv3->outputShape.W, conv3->outputShape.C, TRANSPOSE_WC_TO_CW, ELEM_FLOAT32);
+        //NNModule *transposed_conv3 = nn_Transpose(conv3->outputShape.W, conv3->outputShape.C, TRANSPOSE_WC_TO_CW, ELEM_FLOAT32);
         NNModule *maxpool = nn_AdaptiveMaxPool1d(conv3->outputShape.C, conv3->outputShape.W, 1,  ELEM_FLOAT32);
         NNModule *fc1 = nn_Linear(maxpool->outputShape.C * maxpool->outputShape.W, 128, RELU, fc1_weight, fc1_bias, NULL, NULL, ELEM_FLOAT32);
         NNModule *fc2 = nn_Linear(128, 1, NONE, fc2_weight, fc2_bias, NULL, NULL, ELEM_FLOAT32);
@@ -58,7 +58,7 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         addLayer(model, conv1);
         addLayer(model, conv2);
         addLayer(model, conv3);
-        addLayer(model, transposed_conv3);
+        //addLayer(model, transposed_conv3);
         addLayer(model, maxpool);
         addLayer(model, fc1);
         addLayer(model, fc2);
@@ -110,7 +110,6 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         NNModule *conv1 = nn_Conv1d(1, 384, 5, 64, 1, 2, RELU, conv1_weight, conv1_bias, NULL, NULL, ELEM_FLOAT32);
         NNModule *conv2 = nn_Conv1d(64, conv1->outputShape.W, 5, 128, 1, 2, RELU, conv2_weight, conv2_bias, NULL, NULL, ELEM_FLOAT32);
         NNModule *conv3 = nn_Conv1d(128, conv2->outputShape.W, 3, 256, 1, 1, RELU, conv3_weight, conv3_bias, NULL, NULL, ELEM_FLOAT32);
-        NNModule *transposed_conv3 = nn_Transpose(conv3->outputShape.W, conv3->outputShape.C, TRANSPOSE_WC_TO_CW, ELEM_FLOAT32);
         NNModule *maxpool = nn_AdaptiveMaxPool1d(conv3->outputShape.C, conv3->outputShape.W, 1,  ELEM_FLOAT32);
         NNModule *fc1 = nn_Linear(maxpool->outputShape.C * maxpool->outputShape.W, 128, RELU, fc1_weight, fc1_bias, NULL, NULL, ELEM_FLOAT32);
         NNModule *fc2 = nn_Linear(128, 1, SIGMOID, fc2_weight, fc2_bias, NULL, NULL, ELEM_FLOAT32);
@@ -120,7 +119,6 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         addLayer(model, conv1);
         addLayer(model, conv2);
         addLayer(model, conv3);
-        addLayer(model, transposed_conv3);
         addLayer(model, maxpool);
         addLayer(model, fc1);
         addLayer(model, fc2);
@@ -143,8 +141,9 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
             clock_t end_time = clock();
             elapsed_time += (double)(end_time - start_time);
             // layer count: conv1,conv2,conv3,transpose,maxpool,fc1,fc2 => 7 (odd), 最終輸出在 buffer2
-            float *out_ptr = (float *)buffer2;
-            float prob = out_ptr[0];
+            float *output = (float *)((model->numModules % 2 == 0) ? buffer1 : buffer2);
+
+            float prob = output[0];
             int pred = (prob >= 0.5f) ? 1 : 0;
 
             if (pred == label) {

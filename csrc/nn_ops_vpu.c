@@ -739,6 +739,39 @@ void AdaptiveMaxPool1d_wc_int8_vpu(NNModule *layer, void *input, void *output)
     }
 }
 
+void AdaptiveMaxPool1d_wc_fp32_vpu(NNModule *layer, void *input, void *output)
+{
+    const float *input_f32 = (const float*)input;
+    float *output_f32 = (float*)output;
+    int inW= layer->inputShape.W;
+    int inC= layer->inputShape.C;
+    int outW= layer->outputShape.W;
+    
+    // Input/Output: N=1,H=1; layout [W][C]. Output W pooled.
+    for (int pos = 0; pos < outW; ++pos) {
+        int start = (pos * inW) / outW;
+        int end = ((pos + 1) * inW) / outW;
+        if (end > inW) {
+            end = inW;
+        }
+
+        float *out_ptr = &output_f32[pos * inC];
+        for (int c = 0; c < inC; ) {
+            size_t vl = __riscv_vsetvl_e32m8(inC - c);
+            vfloat32m8_t vmax = __riscv_vfmv_v_f_f32m8(-INFINITY, vl);
+
+            for (int w = start; w < end; ++w) {
+                const float *in_ptr = &input_f32[w * inC + c];
+                vfloat32m8_t vin = __riscv_vle32_v_f32m8(in_ptr, vl);
+                vmax = __riscv_vfmax_vv_f32m8(vmax, vin, vl);
+            }
+
+            __riscv_vse32_v_f32m8(&output_f32[c], vmax, vl);
+            c += (int)vl;
+        }
+    }
+}
+
 void AdaptiveMaxPool1d_int8_vpu(NNModule *layer, void *input, void *output) {
     int outW = layer->outputShape.W;
     int inW  = layer->inputShape.W;

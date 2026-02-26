@@ -29,7 +29,7 @@ void avgpool2d_fp32_vpu(NNModule *layer, void *input, void *output);
 void AdaptiveMaxPool1d_int8_vpu(NNModule *layer, void *input, void *output);
 void AdaptiveMaxPool1d_fp32_vpu(NNModule *layer, void *input, void *output);
 void AdaptiveMaxPool1d_wc_int8_vpu(NNModule *layer, void *input, void *output);
-
+void AdaptiveMaxPool1d_wc_fp32_vpu(NNModule *layer, void *input, void *output);
 void AdaptiveAvgPool2d_int8_vpu(NNModule *layer, void *input, void *output);
 void AdaptiveAvgPool2d_fp32_vpu(NNModule *layer, void *input, void *output);
 
