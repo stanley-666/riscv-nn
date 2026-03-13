@@ -276,7 +276,7 @@ NNModule *nn_Linear(int inputSize, int outputSize, ActivationType activation, co
         int inDim = inputSize;
         int outDim = outputSize;
         const int8_t *wt_src = (const int8_t *)weights;
-        int8_t *wt_rvv = (int8_t *)safe_malloc(inDim * outDim * sizeof(int8_t));
+        int16_t *wt_rvv = (int16_t *)safe_malloc(inDim * outDim * sizeof(int16_t));
         for (int o = 0; o < outDim; ++o)
             for (int i = 0; i < inDim; ++i)
                 wt_rvv[i * outDim + o] = wt_src[o * inDim + i];

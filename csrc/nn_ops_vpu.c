@@ -643,7 +643,7 @@ void fullyconnected_int8_vpu(NNModule *layer, void *input, void *output)
     const int32_t *bias_i32 = (const int32_t*)layer->params.fc.bias;
     const float *M = (const float *)layer->params.fc.M;
     const int32_t *Z = (const int32_t *)layer->params.fc.zps; // zero point
-    const int8_t *wt_T = (const int8_t *)layer->params.fc.weights_rvv;
+    const int16_t *wt_T = (const int16_t *)layer->params.fc.weights_rvv;
     requantize_store_kernel_t rq_kernel = select_requantize_store_kernel(layer->activation);
 
     int32_t *acc_buffer = (int32_t *)layer->params.fc.acc_buffer; // 預先配置的 FC 累加暫存
@@ -651,20 +651,16 @@ void fullyconnected_int8_vpu(NNModule *layer, void *input, void *output)
         acc_buffer = (int32_t *)safe_malloc(outW * sizeof(int32_t));
 
     for (int o = 0; o < outW; ) {
-        size_t vl = __riscv_vsetvl_e8m2(outW - o);
-        vint32m8_t vacc = __riscv_vmv_v_x_i32m8(0, vl);
+        size_t vl = __riscv_vsetvl_e16m4(outW - o);
+        vint32m8_t vacc = __riscv_vle32_v_i32m8(&bias_i32[o], vl);
 
         for (int i = 0; i < inDim; ++i) {
             int8_t inval = input_i8[i];
             if (inval == 0) continue;
-            const int8_t *wt_ptr = &wt_T[i * outW + o];
-            vint8m2_t vwt8 = __riscv_vle8_v_i8m2(wt_ptr, vl);
-            vint16m4_t vwt16 = __riscv_vsext_vf2_i16m4(vwt8, vl);
+            const int16_t *wt_ptr = &wt_T[i * outW + o];
+            vint16m4_t vwt16  = __riscv_vle16_v_i16m4(wt_ptr, vl);
             vacc = __riscv_vwmacc_vx_i32m8(vacc, inval, vwt16, vl);
         }
-        vint32m8_t vbias = __riscv_vle32_v_i32m8(&bias_i32[o], vl);
-        vacc = __riscv_vadd_vv_i32m8(vacc, vbias, vl);
-
         __riscv_vse32_v_i32m8(&acc_buffer[o], vacc, vl);
         o += vl;
     }

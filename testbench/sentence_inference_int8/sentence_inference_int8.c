@@ -123,7 +123,7 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
             const int8_t *embedding = test_embeddings[i];
             bool label = test_labels[i];
 
-            forward(model, embedding);
+            forward(model, (void *)embedding);
             int8_t *output = (int8_t *) buffer1;  // 最後輸出在 buffer1
 
 
@@ -243,7 +243,6 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
             }
         }
 
-        clock_t end_time = clock();
         elapsed_time = elapsed_time / CLOCKS_PER_SEC;
         printf("Inference time: %.6f seconds\n", elapsed_time);
         printf("Overall accuracy: %.2f%% (%d/%d correct)\n", (double)correct / NUM_SAMPLES * 100.0, correct, NUM_SAMPLES);
