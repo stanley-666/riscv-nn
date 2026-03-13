@@ -15,3 +15,5 @@
 C test data 2658th :  11.3552
 Python test data 2658th : 11.355240
 
+Inference time: 7.949469 seconds
+Overall accuracy: 99.25% (2638/2658 correct)

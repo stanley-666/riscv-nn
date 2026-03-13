@@ -310,53 +310,6 @@ void *padded_input_create_nhwc_2d(NNModule *layer, const void *input) {
     return padded_input;
 }
 
-void *wc_to_cw_int8(void *input, int W, int C) {
-    int8_t *src = (int8_t *)input;          // layout: [W][C]
-    int8_t *dst = (int8_t *)safe_malloc(W * C * sizeof(int8_t)); // layout: [C][W]
-
-    for (int w = 0; w < W; w++) {
-        for (int c = 0; c < C; c++) {
-            dst[c * W + w] = src[w * C + c];
-        }
-    }
-    return dst;
-}
-
-void *wc_to_cw_f32(void *input, int W, int C) {
-    float *src = (float *)input;            // layout: [W][C]
-    float *dst = (float *)safe_malloc(W * C * sizeof(float)); // layout: [C][W]
-
-    for (int w = 0; w < W; w++) {
-        for (int c = 0; c < C; c++) {
-            dst[c * W + w] = src[w * C + c];
-        }
-    }
-    return dst;
-}
-
-void *cw_to_wc_int8(void *input, int W, int C) {
-    int8_t *src = (int8_t *)input;          // layout: [C][W]
-    int8_t *dst = (int8_t *)safe_malloc(W * C * sizeof(int8_t)); // layout: [W][C]
-
-    for (int c = 0; c < C; c++) {
-        for (int w = 0; w < W; w++) {
-            dst[w * C + c] = src[c * W + w];
-        }
-    }
-    return dst;
-}
-
-void *cw_to_wc_f32(void *input, int W, int C) {
-    float *src = (float *)input;            // layout: [C][W]
-    float *dst = (float *)safe_malloc(W * C * sizeof(float)); // layout: [W][C]
-
-    for (int c = 0; c < C; c++) {
-        for (int w = 0; w < W; w++) {
-            dst[w * C + c] = src[c * W + w];
-        }
-    }
-    return (void*)dst;
-}
 
 int8_t clip_i32_i8(int32_t x, int8_t min_val, int8_t max_val) {
     // asymmetric clipping
@@ -365,15 +318,25 @@ int8_t clip_i32_i8(int32_t x, int8_t min_val, int8_t max_val) {
     return x;
 }
 
-int8_t requantize_int8(const int32_t input, float scale, int32_t zero_point) {
-/*
-    int32 accumulator (MAC 結果)
-    這裡對應 (s_in * s_w / s_out)
-    輸出 z_out
-*/
-    //printf("Requantize: input=%d, scale=%f, zero_point=%d\n", input, scale, zero_point);
+// bitwidth, scale sharing, zero point type
+
+int8_t requantize_int8_symmetric(const int32_t input, float scale) {
+    /*
+        int32 accumulator (MAC 結果)
+        這裡對應 (s_in * s_w / s_out)
+        輸出 z_out
+    */
+    int32_t q = (int32_t)roundf(input * scale);
+    return clip_i32_i8(q, INT8_MIN+1, INT8_MAX); // -128 127
+}
+
+int8_t requantize_int8_asymmetric(const int32_t input, float scale, int32_t zero_point) {
+    /*
+        int32 accumulator (MAC 結果)
+        這裡對應 (s_in * s_w / s_out)
+        輸出 z_out
+    */
     int32_t q = (int32_t)roundf(input * scale) + zero_point;
-    //printf("Requantize: input=%d, scale=%f, zero_point=%d, q=%d\n", input, scale, zero_point, q);
     return clip_i32_i8(q, INT8_MIN+1, INT8_MAX); // -128 127
 }
 
@@ -381,6 +344,7 @@ void free_pingpong_buffer() {
     safe_free(buffer1);
     safe_free(buffer2);
 }
+
 /*
 Copyright (c) 2025, MC2 Lab, National Taiwan Normal University.All rights reserved.
 Author : Stanley Lee

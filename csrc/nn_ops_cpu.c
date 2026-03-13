@@ -77,7 +77,7 @@ void conv1d_cpu(NNModule *layer, void *input, void *output)
                         sum += x * w;
                     }
                 }
-                int8_t requantized = requantize_int8(sum, M[oc], Z[oc]);
+                int8_t requantized = requantize_int8_asymmetric(sum, M[oc], Z[oc]);
                 output_i8[oc * outW + pos] = activate_i8(requantized, layer->activation);
             }
         }
@@ -174,7 +174,7 @@ void conv2d_cpu(NNModule *layer, void *input, void *output)
                             }
                         }
                     }
-                    int8_t rq = requantize_int8(sum, M[oc], Z[oc]);
+                    int8_t rq = requantize_int8_asymmetric(sum, M[oc], Z[oc]);
                     output_i8[oc * outH * outW + oh * outW + ow] = activate_i8(rq, layer->activation);
                 }
             }
@@ -461,7 +461,7 @@ void fullyconnected_cpu(NNModule *layer, void *input, void *output)
             for (int i = 0; i < inDim; i++) {
                 sum += input_i8[i] * weights_i8[o * inDim + i];
             }
-            int8_t requantized = requantize_int8(sum, M[o], Z[o]);
+            int8_t requantized = requantize_int8_asymmetric(sum, M[o], Z[o]);
             output_i8[o] = activate_i8(requantized, layer->activation);
         }
         break;

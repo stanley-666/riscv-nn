@@ -32,3 +32,19 @@ and Python utilities for model preparation.
 
 Each testbench directory includes its own `README.md` with Spike performance
 tables. Use those files to record metrics such as cycles, CPI, and runtime.
+
+## Implementation Notes
+
+- RVV FP32 kernels for elementwise activations now use a fused post-process path:
+  `accumulate -> activation -> store`.
+- This fused path is valid for activations that can be applied per element,
+  such as `RELU`, `LEAKY_RELU`, and `NONE`.
+- `SOFTMAX` is not an elementwise activation. It cannot be fused per RVV chunk
+  because it requires the full output vector. Current code stores logits first
+  and runs `softmax_f32(...)` only after the full vector is available.
+- INT8 RVV conv/fc kernels still use an `acc_buffer` for post-processing
+  because requantization currently operates on a full `int32` buffer rather
+  than directly on RVV accumulators.
+- The inference runtime uses ping-pong working buffers (`buffer1`, `buffer2`).
+  The final output buffer depends on layer-count parity: odd layer counts end
+  in `buffer2`, even layer counts end in `buffer1`.

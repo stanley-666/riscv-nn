@@ -88,7 +88,7 @@ void conv1d_fp32_vpu(NNModule *layer, void *input, void *output)
     const float *bias_f32    = (const float *)layer->params.conv.bias;
     const float *weight_buffer = (const float *)layer->params.conv.weights_rvv; // (K*inC, outC) 佈局
 
-    float *acc_buffer = (float *)layer->params.conv.acc_buffer;
+    //float *acc_buffer = (float *)layer->params.conv.acc_buffer;
 
     /* Reorder kernel to (K * inC, outC) layout for contiguous vector loads */
 
@@ -99,7 +99,8 @@ void conv1d_fp32_vpu(NNModule *layer, void *input, void *output)
 
             for (int k = 0; k < filterSize; ++k) {
                 const float *in_ptr = &input_f32[(pos * stride + k) * inC];
-                for (int ic = 0; ic < inC; ++ic) {
+                for (int ic = 0; ic < inC; ++ic) {   
+                    if(in_ptr[ic] == 0.0f) continue;
                     float inval = in_ptr[ic];
                     int col_idx = k * inC + ic;
                     const float *wt = &weight_buffer[col_idx * outC + oc];
@@ -108,12 +109,9 @@ void conv1d_fp32_vpu(NNModule *layer, void *input, void *output)
                 }
             }
 
-            __riscv_vse32_v_f32m8(&acc_buffer[oc], vacc, vl);
+            activate_store_chunk_f32(layer->activation, vacc, &output_f32[pos * outC + oc], vl);
             oc += vl;
         }
-        
-        float *out_row = &output_f32[pos * outC];    
-        activate_store_rvv_f32(out_row, acc_buffer, outC, layer->activation);
     }
 
     if (layer->params.conv.padding > 0)
@@ -694,11 +692,10 @@ void fullyconnected_fp32_vpu(NNModule *layer, void *input, void *output)
             vacc = __riscv_vfmacc_vf_f32m8(vacc, inval, vwt, vl);
         }
 
-        __riscv_vse32_v_f32m8(&output_f32[o], vacc, vl);
+        // activation ＆ store
+        activate_store_chunk_f32(act, vacc, &output_f32[o], vl);
         o += vl;
     }
-
-    activate_store_rvv_f32(output_f32, output_f32, outW, act);
 }
 
 void AdaptiveMaxPool1d_wc_int8_vpu(NNModule *layer, void *input, void *output)

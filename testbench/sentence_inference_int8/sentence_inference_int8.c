@@ -283,6 +283,6 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
 
 int main() {
     //sentence_i8_rvv();
-    sentence_i8_rvv_wc_pool_direct();
+    sentence_all_i8_rvv();
     return 0;
 }

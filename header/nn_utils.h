@@ -26,15 +26,11 @@ void *padded_input_create_nchw_2d(NNModule *layer, const void *input);
 void *padded_input_create_nhwc_2d(NNModule *layer, const void *input);
 // clipping
 int8_t clip_i32_i8(int32_t x, int8_t min_val, int8_t max_val);
-int8_t requantize_int8(const int32_t input, float scale, int32_t zero_point);
-
+int8_t requantize_int8_symmetric(const int32_t input, float scale);
+int8_t requantize_int8_asymmetric(const int32_t input, float scale, int32_t zero_point);
 void init_pingpong_buffer(size_t num_elem, elem_type dtype);
 void free_pingpong_buffer();
 
-void *wc_to_cw_int8(void *input, int W, int C);
-void *wc_to_cw_f32(void *input, int W, int C);
-void *cw_to_wc_int8(void *input, int W, int C);
-void *cw_to_wc_f32(void *input, int W, int C);
 #endif // _1DCNN_UTILS_H_
 
 /*

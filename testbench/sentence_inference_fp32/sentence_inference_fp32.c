@@ -10,8 +10,8 @@
 
 #include "weights_fp32.h"
 #include "random_embedding.h"
-//#include "test_dataset_2658.h"
-#include "test_dataset.h"
+#include "test_dataset_2658.h"
+//#include "test_dataset.h"
 
 #define SENTENCE_FP32_MAX_ELEMS (384 * 256)  // max tensor elements across the model
 static float buffer1_static[SENTENCE_FP32_MAX_ELEMS] __attribute__((aligned(64)));
@@ -43,7 +43,6 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         NNModule *conv1 = nn_Conv1d(1, 384, 5, 64, 1, 2, RELU, conv1_weight, conv1_bias, NULL, NULL, ELEM_FLOAT32);
         NNModule *conv2 = nn_Conv1d(64, conv1->outputShape.W, 5, 128, 1, 2, RELU, conv2_weight, conv2_bias, NULL, NULL, ELEM_FLOAT32);
         NNModule *conv3 = nn_Conv1d(128, conv2->outputShape.W, 3, 256, 1, 1, RELU, conv3_weight, conv3_bias, NULL, NULL, ELEM_FLOAT32);
-        //NNModule *transposed_conv3 = nn_Transpose(conv3->outputShape.W, conv3->outputShape.C, TRANSPOSE_WC_TO_CW, ELEM_FLOAT32);
         NNModule *maxpool = nn_AdaptiveMaxPool1d(conv3->outputShape.C, conv3->outputShape.W, 1,  ELEM_FLOAT32);
         NNModule *fc1 = nn_Linear(maxpool->outputShape.C * maxpool->outputShape.W, 128, RELU, fc1_weight, fc1_bias, NULL, NULL, ELEM_FLOAT32);
         NNModule *fc2 = nn_Linear(128, 1, NONE, fc2_weight, fc2_bias, NULL, NULL, ELEM_FLOAT32);
@@ -58,7 +57,6 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         addLayer(model, conv1);
         addLayer(model, conv2);
         addLayer(model, conv3);
-        //addLayer(model, transposed_conv3);
         addLayer(model, maxpool);
         addLayer(model, fc1);
         addLayer(model, fc2);
@@ -78,7 +76,7 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         clock_t end_time = clock();
         float *output = (float *)((model->numModules % 2 == 0) ? buffer1 : buffer2); // 根據層數判斷最終輸出所在的 ping-pong buffer
         double elapsed_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
-         printf("Inference time: %lu cycles\n", end_cycle - start_cycle);
+        printf("Inference time: %lu cycles\n", end_cycle - start_cycle);
         printf("Inference time: %.6f seconds\n", elapsed_time);
 
         // print output

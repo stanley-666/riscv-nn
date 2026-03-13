@@ -69,7 +69,7 @@ static void requantize_store_scalar_with_act(const int32_t *src,
                                              ActivationType act)
 {
     for (int i = 0; i < len; ++i) {
-        int8_t rq = requantize_int8(src[i], scale[i], zp[i]);
+        int8_t rq = requantize_int8_asymmetric(src[i], scale[i], zp[i]);
         dst[i] = activate_i8(rq, act);
     }
 }

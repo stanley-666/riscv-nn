@@ -25,15 +25,14 @@ From `header/nn_param.h`:
 
 ## Data Layout
 
-All tensors use NCHW layout:
+Tensor shapes are described with `N/C/H/W` fields in the API, but the active
+RVV conv kernels operate on contiguous NHWC-style buffers:
 
-- `N`: batch size (currently assumed to be 1 in kernels)
-- `C`: channels
-- `H`: height (for 1D models, use `H=1`)
-- `W`: width / length
+- 1D tensors are treated as `[W][C]` with `N=1, H=1`
+- 2D tensors are treated as `[H][W][C]` with `N=1`
 
-Input buffers and outputs are 1D contiguous arrays in NCHW order. For 1D
-models the layout is `[C][W]` (since `N=1, H=1`).
+Some testbenches insert an explicit transpose layer to convert model inputs
+into the layout expected by the RVV kernels.
 
 Weights are stored as contiguous arrays:
 
@@ -65,6 +64,13 @@ For `ELEM_FLOAT32`, these can be `NULL`.
 - Conv2d is limited to square kernels/stride/padding and no dilation.
 - Kernel implementations primarily support `ELEM_INT8` and `ELEM_FLOAT32`.
   Other element types are declared but not fully implemented.
+- FP32 RVV conv/fc paths fuse elementwise activations (`RELU`, `LEAKY_RELU`,
+  `NONE`) directly into the store path.
+- `SOFTMAX` is not fused per RVV chunk. It must run after the complete output
+  vector has been written.
+- INT8 RVV conv/fc paths still use `acc_buffer` because requantization is
+  currently implemented as a full-buffer post-process from `int32` accumulators
+  to `int8`.
 
 ## Minimal Usage
 

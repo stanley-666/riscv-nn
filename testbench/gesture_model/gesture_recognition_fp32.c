@@ -70,9 +70,10 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
             clock_t start_time = clock();
             uint64_t start_cycle = read_rdcycle();
             forward_fp32_vpu(model, (void *)gestures[g]);
+            softmax_f32((float*)buffer2, (float*)buffer1, 4);
             uint64_t end_cycle = read_rdcycle();
             clock_t end_time = clock();
-            float* output = (float *) buffer2;
+            float* output = (float *) buffer1;
             uint64_t cycle_diff = end_cycle - start_cycle;
             printf("[%s] Inference cycles: %lu cycles\n", gesture_names[g], cycle_diff);
             double elapsed_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
