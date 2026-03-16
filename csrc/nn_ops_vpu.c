@@ -36,7 +36,7 @@ void conv1d_i8_vpu(NNModule *layer, void *input, void *output)
     const int16_t *weight_buffer = (const int16_t *)layer->params.conv.weights_rvv; // (K*inC, outC) 佈局
     const float   *M          = (const float *)layer->params.conv.M;
     const int32_t *Z          = (const int32_t *)layer->params.conv.zps;
-    int32_t *acc_buffer = (int32_t *)layer->params.conv.acc_buffer;
+    requantize_store_chunk_i8_asym_per_channel_kernel_t act_kernel = select_requantize_store_chunk_i8_asym_per_channel_kernel(layer->activation);
 
     for (int pos = 0; pos < outW; ++pos) {
         for (int oc = 0; oc < outC; ) {
@@ -55,13 +55,9 @@ void conv1d_i8_vpu(NNModule *layer, void *input, void *output)
                     vacc = __riscv_vwmacc_vx_i32m8(vacc, inval, vwt16, vl);
                 }
             }
-
-            __riscv_vse32_v_i32m8(&acc_buffer[oc], vacc, vl);
+            act_kernel(vacc, &M[oc], &Z[oc], &output_i8[pos * outC + oc], vl);
             oc += vl;
         }
-
-        int8_t *out_row = &output_i8[pos * outC];
-        requantize_activate_store_rvv(acc_buffer, M, Z, out_row, outC, layer->activation);
     }
 
     if (layer->params.conv.padding > 0)
@@ -87,6 +83,7 @@ void conv1d_fp32_vpu(NNModule *layer, void *input, void *output)
     float       *output_f32  = (float *)output;
     const float *bias_f32    = (const float *)layer->params.conv.bias;
     const float *weight_buffer = (const float *)layer->params.conv.weights_rvv; // (K*inC, outC) 佈局
+    activate_store_chunk_kernel_f32_t act_kernel = select_activate_store_chunk_kernel_f32(layer->activation);
 
     //float *acc_buffer = (float *)layer->params.conv.acc_buffer;
 
@@ -109,7 +106,7 @@ void conv1d_fp32_vpu(NNModule *layer, void *input, void *output)
                 }
             }
 
-            activate_store_chunk_f32(layer->activation, vacc, &output_f32[pos * outC + oc], vl);
+            act_kernel(vacc, &output_f32[pos * outC + oc], vl);
             oc += vl;
         }
     }
@@ -144,7 +141,8 @@ void conv2d_int8_vpu(NNModule *layer, void *input, void *output)
     const int16_t *weight_buffer = (const int16_t *)layer->params.conv2d.weights_rvv;
     const float *M = (const float *)layer->params.conv2d.M;
     const int32_t *Z = (const int32_t *)layer->params.conv2d.zps;
-    int32_t *acc_buffer = (int32_t *)layer->params.conv2d.acc_buffer;
+    requantize_store_chunk_i8_asym_per_channel_kernel_t act_kernel =
+        select_requantize_store_chunk_i8_asym_per_channel_kernel(layer->activation);
 
     if (!weight_buffer) {
         printf("Error: conv2d weights_rvv not initialized.\n");
@@ -179,12 +177,9 @@ void conv2d_int8_vpu(NNModule *layer, void *input, void *output)
                 vint32m8_t vbias = __riscv_vle32_v_i32m8(&bias_i32[oc], vl);
                 vacc = __riscv_vadd_vv_i32m8(vacc, vbias, vl);
 
-                __riscv_vse32_v_i32m8(&acc_buffer[oc], vacc, vl);
+                act_kernel(vacc, &M[oc], &Z[oc], &output_i8[(oh * outW + ow) * outC + oc], vl);
                 oc += vl;
             }
-
-            int8_t *out_row = &output_i8[(oh * outW + ow) * outC];
-            requantize_activate_store_rvv(acc_buffer, M, Z, out_row, outC, layer->activation);
         }
     }
 
@@ -216,7 +211,7 @@ void conv2d_fp32_vpu(NNModule *layer, void *input, void *output)
     float *output_f32 = (float *)output;
     const float *bias_f32 = (const float *)layer->params.conv2d.bias;
     const float *weight_buffer = (const float *)layer->params.conv2d.weights_rvv;
-    float *acc_buffer = (float *)layer->params.conv2d.acc_buffer;
+    activate_store_chunk_kernel_f32_t act_kernel = select_activate_store_chunk_kernel_f32(layer->activation);
 
     for (int oh = 0, base_h = 0; oh < outH; ++oh, base_h += stride) {
         for (int ow = 0, base_w = 0; ow < outW; ++ow, base_w += stride) {
@@ -241,12 +236,9 @@ void conv2d_fp32_vpu(NNModule *layer, void *input, void *output)
                     }
                 }
 
-                __riscv_vse32_v_f32m8(&acc_buffer[oc], vacc, vl);
+                act_kernel(vacc, &output_f32[(oh * outW + ow) * outC + oc], vl);
                 oc += vl;
             }
-
-            float *out_row = &output_f32[(oh * outW + ow) * outC];
-            activate_store_rvv_f32(out_row, acc_buffer, outC, layer->activation);
         }
     }
 
@@ -642,11 +634,8 @@ void fullyconnected_int8_vpu(NNModule *layer, void *input, void *output)
     const float *M = (const float *)layer->params.fc.M;
     const int32_t *Z = (const int32_t *)layer->params.fc.zps; // zero point
     const int16_t *wt_T = (const int16_t *)layer->params.fc.weights_rvv;
-    requantize_store_kernel_t rq_kernel = select_requantize_store_kernel(layer->activation);
-
-    int32_t *acc_buffer = (int32_t *)layer->params.fc.acc_buffer; // 預先配置的 FC 累加暫存
-    if (!acc_buffer)
-        acc_buffer = (int32_t *)safe_malloc(outW * sizeof(int32_t));
+    requantize_store_chunk_i8_asym_per_channel_kernel_t rq_kernel =
+        select_requantize_store_chunk_i8_asym_per_channel_kernel(layer->activation);
 
     for (int o = 0; o < outW; ) {
         size_t vl = __riscv_vsetvl_e16m4(outW - o);
@@ -659,11 +648,12 @@ void fullyconnected_int8_vpu(NNModule *layer, void *input, void *output)
             vint16m4_t vwt16  = __riscv_vle16_v_i16m4(wt_ptr, vl);
             vacc = __riscv_vwmacc_vx_i32m8(vacc, inval, vwt16, vl);
         }
-        __riscv_vse32_v_i32m8(&acc_buffer[o], vacc, vl);
+
+        // store vacc
+        
+        rq_kernel(vacc, &M[o], &Z[o], &output_i8[o], vl);
         o += vl;
     }
-
-    rq_kernel(acc_buffer, M, Z, output_i8, outW);
 }
 
 void fullyconnected_fp32_vpu(NNModule *layer, void *input, void *output)
@@ -679,6 +669,7 @@ void fullyconnected_fp32_vpu(NNModule *layer, void *input, void *output)
     const float *bias_f32 = (const float*)layer->params.fc.bias;
 
     const float *wt_T = (const float *)layer->params.fc.weights_rvv;
+    activate_store_chunk_kernel_f32_t act_kernel = select_activate_store_chunk_kernel_f32(act);
 
     for (int o = 0; o < outW; ) {
         size_t vl = __riscv_vsetvl_e32m8(outW - o);
@@ -693,7 +684,7 @@ void fullyconnected_fp32_vpu(NNModule *layer, void *input, void *output)
         }
 
         // activation ＆ store
-        activate_store_chunk_f32(act, vacc, &output_f32[o], vl);
+        act_kernel(vacc, &output_f32[o], vl);
         o += vl;
     }
 }
@@ -950,16 +941,15 @@ void add_vpu(NNModule *layer, void *input, void *output)
         float *skip = (float *)layer->params.add.skip;
         float *out = (float *)output;
         int len = (int)(layer->params.add.bytes / sizeof(float));
+        activate_store_chunk_kernel_f32_t act_kernel = select_activate_store_chunk_kernel_f32(layer->activation);
         for (int i = 0; i < len; ) {
             size_t vl = __riscv_vsetvl_e32m8(len - i);
             vfloat32m8_t v0 = __riscv_vle32_v_f32m8(&in[i], vl);
             vfloat32m8_t v1 = __riscv_vle32_v_f32m8(&skip[i], vl);
             vfloat32m8_t vsum = __riscv_vfadd_vv_f32m8(v0, v1, vl);
-            __riscv_vse32_v_f32m8(&out[i], vsum, vl);
+            act_kernel(vsum, &out[i], vl);
             i += (int)vl;
         }
-        if (layer->activation != NONE)
-            activate_store_rvv_f32(out, out, len, layer->activation);
         break;
     }
     case ELEM_INT8: {

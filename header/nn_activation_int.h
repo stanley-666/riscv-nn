@@ -4,18 +4,13 @@
 #include "nn_param.h"
 #include <riscv_vector.h>
 
-typedef void (*requantize_store_kernel_t)(const int32_t *src,
-                                          const float *scale,
-                                          const int32_t *zp,
-                                          int8_t *dst,
-                                          int len);
+typedef void (*requantize_store_chunk_i8_asym_per_channel_kernel_t)(vint32m8_t vacc,
+                                                                    const float *scale,
+                                                                    const int32_t *zp,
+                                                                    int8_t *dst,
+                                                                    size_t vl);
 
-requantize_store_kernel_t select_requantize_store_kernel(ActivationType act);
-void requantize_activate_store_rvv(const int32_t *src,
-                                   const float *scale,
-                                   const int32_t *zp,
-                                   int8_t *dst,
-                                   int len,
-                                   ActivationType act);
+requantize_store_chunk_i8_asym_per_channel_kernel_t
+select_requantize_store_chunk_i8_asym_per_channel_kernel(ActivationType act);
 
 #endif

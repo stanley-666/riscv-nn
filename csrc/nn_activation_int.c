@@ -4,26 +4,22 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-// requantize activation kernels for post-processing int32 accumulators into int8 outputs with activation functions fused in.
+// Requantize + activation kernels for post-processing int32 accumulators into int8 outputs.
 
 enum { ACTIVATION_KERNEL_COUNT = 6 };
 
-static inline vint8m2_t requantize_i8_chunk_rvv(const int32_t *src,
-                                                 const float *scale,
-                                                 const int32_t *zp,
-                                                 int i,
-                                                 size_t vl)
+static inline vint8m2_t requantize_vacc_i8_asym_per_channel(vint32m8_t vacc,
+                                                            const float *scale,
+                                                            const int32_t *zp,
+                                                            size_t vl)
 {
-    vint32m8_t vacc = __riscv_vle32_v_i32m8(&src[i], vl);
-
     vfloat32m8_t vacc_f = __riscv_vfcvt_f_x_v_f32m8(vacc, vl);
-    vfloat32m8_t vscale = __riscv_vle32_v_f32m8(&scale[i], vl);
+    vfloat32m8_t vscale = __riscv_vle32_v_f32m8(scale, vl);
+    vint32m8_t vzp = __riscv_vle32_v_i32m8(zp, vl);
     vacc_f = __riscv_vfmul_vv_f32m8(vacc_f, vscale, vl);
-
     vint32m8_t vround = __riscv_vfcvt_x_f_v_i32m8(vacc_f, vl);
-    vint32m8_t vzp = __riscv_vle32_v_i32m8(&zp[i], vl);
-    vround = __riscv_vadd_vv_i32m8(vround, vzp, vl);
 
+    vround = __riscv_vadd_vv_i32m8(vround, vzp, vl);
     vround = __riscv_vmax_vx_i32m8(vround, INT8_MIN, vl);
     vround = __riscv_vmin_vx_i32m8(vround, INT8_MAX, vl);
 
@@ -31,136 +27,115 @@ static inline vint8m2_t requantize_i8_chunk_rvv(const int32_t *src,
     return __riscv_vncvt_x_x_w_i8m2(vq16, vl);
 }
 
-static void requantize_store_none_rvv(const int32_t *src,
-                                      const float *scale,
-                                      const int32_t *zp,
-                                      int8_t *dst,
-                                      int len)
+static void requantize_store_chunk_i8_asym_per_channel_none(vint32m8_t vacc,
+                                                            const float *scale,
+                                                            const int32_t *zp,
+                                                            int8_t *dst,
+                                                            size_t vl)
 {
-    for (int i = 0; i < len; ) {
-        size_t vl = __riscv_vsetvl_e32m8(len - i);
-        vint8m2_t vq8 = requantize_i8_chunk_rvv(src, scale, zp, i, vl);
-        __riscv_vse8_v_i8m2(&dst[i], vq8, vl);
-        i += vl;
-    }
+    vint8m2_t vq8 = requantize_vacc_i8_asym_per_channel(vacc, scale, zp, vl);
+    __riscv_vse8_v_i8m2(dst, vq8, vl);
 }
 
-static void requantize_store_relu_rvv(const int32_t *src,
-                                      const float *scale,
-                                      const int32_t *zp,
-                                      int8_t *dst,
-                                      int len)
+static void requantize_store_chunk_i8_asym_per_channel_relu(vint32m8_t vacc,
+                                                            const float *scale,
+                                                            const int32_t *zp,
+                                                            int8_t *dst,
+                                                            size_t vl)
 {
-    for (int i = 0; i < len; ) {
-        size_t vl = __riscv_vsetvl_e32m8(len - i);
-        vint8m2_t vq8 = requantize_i8_chunk_rvv(src, scale, zp, i, vl);
-        //vint8m2_t vzero = __riscv_vmv_v_x_i8m2(0, vl);
-        vq8 = __riscv_vmax_vx_i8m2(vq8, 0, vl);
-        __riscv_vse8_v_i8m2(&dst[i], vq8, vl);
-        i += vl;
-    }
+    vint8m2_t vq8 = requantize_vacc_i8_asym_per_channel(vacc, scale, zp, vl);
+    vq8 = __riscv_vmax_vx_i8m2(vq8, 0, vl);
+    __riscv_vse8_v_i8m2(dst, vq8, vl);
 }
 
-static void requantize_store_scalar_with_act(const int32_t *src,
-                                             const float *scale,
-                                             const int32_t *zp,
-                                             int8_t *dst,
-                                             int len,
-                                             ActivationType act)
+static void requantize_store_chunk_i8_asym_per_channel_scalar_with_act(vint32m8_t vacc,
+                                                                       const float *scale,
+                                                                       const int32_t *zp,
+                                                                       int8_t *dst,
+                                                                       size_t vl,
+                                                                       ActivationType act)
 {
-    for (int i = 0; i < len; ++i) {
-        int8_t rq = requantize_int8_asymmetric(src[i], scale[i], zp[i]);
+    int32_t tmp[vl];
+    __riscv_vse32_v_i32m8(tmp, vacc, vl);
+    for (size_t i = 0; i < vl; ++i) {
+        int8_t rq = requantize_int8_asymmetric(tmp[i], scale[i], zp[i]);
         dst[i] = activate_i8(rq, act);
     }
 }
 
-static void requantize_store_tanh_scalar(const int32_t *src,
-                                         const float *scale,
-                                         const int32_t *zp,
-                                         int8_t *dst,
-                                         int len)
+static void requantize_store_chunk_i8_asym_per_channel_tanh(vint32m8_t vacc,
+                                                            const float *scale,
+                                                            const int32_t *zp,
+                                                            int8_t *dst,
+                                                            size_t vl)
 {
-    requantize_store_scalar_with_act(src, scale, zp, dst, len, TANH);
+    requantize_store_chunk_i8_asym_per_channel_scalar_with_act(vacc, scale, zp, dst, vl, TANH);
 }
 
-static void requantize_store_leaky_relu_scalar(const int32_t *src,
-                                               const float *scale,
-                                               const int32_t *zp,
-                                               int8_t *dst,
-                                               int len)
+static void requantize_store_chunk_i8_asym_per_channel_sigmoid(vint32m8_t vacc,
+                                                               const float *scale,
+                                                               const int32_t *zp,
+                                                               int8_t *dst,
+                                                               size_t vl)
 {
-    requantize_store_scalar_with_act(src, scale, zp, dst, len, LEAKY_RELU);
+    requantize_store_chunk_i8_asym_per_channel_scalar_with_act(vacc, scale, zp, dst, vl, SIGMOID);
 }
 
-static void requantize_store_unsupported_sigmoid(const int32_t *src,
-                                                 const float *scale,
-                                                 const int32_t *zp,
-                                                 int8_t *dst,
-                                                 int len)
+static void requantize_store_chunk_i8_asym_per_channel_leaky_relu(vint32m8_t vacc,
+                                                                  const float *scale,
+                                                                  const int32_t *zp,
+                                                                  int8_t *dst,
+                                                                  size_t vl)
 {
-    (void)src;
+    requantize_store_chunk_i8_asym_per_channel_scalar_with_act(vacc, scale, zp, dst, vl, LEAKY_RELU);
+}
+
+static void requantize_store_chunk_i8_asym_per_channel_unsupported_softmax(vint32m8_t vacc,
+                                                                           const float *scale,
+                                                                           const int32_t *zp,
+                                                                           int8_t *dst,
+                                                                           size_t vl)
+{
+    (void)vacc;
     (void)scale;
     (void)zp;
     (void)dst;
-    (void)len;
-    printf("SIGMOID activation not implemented in requantize_activate_store_rvv.\n");
-    exit(EXIT_FAILURE);
-}
-
-static void requantize_store_unsupported_softmax(const int32_t *src,
-                                                 const float *scale,
-                                                 const int32_t *zp,
-                                                 int8_t *dst,
-                                                 int len)
-{
-    (void)src;
-    (void)scale;
-    (void)zp;
-    (void)dst;
-    (void)len;
+    (void)vl;
     printf("SOFTMAX activation not implemented in requantize_activate_store_rvv.\n");
     exit(EXIT_FAILURE);
 }
 
-static void requantize_store_unsupported_unknown(const int32_t *src,
-                                                 const float *scale,
-                                                 const int32_t *zp,
-                                                 int8_t *dst,
-                                                 int len)
+static void requantize_store_chunk_i8_asym_per_channel_unsupported_unknown(vint32m8_t vacc,
+                                                                           const float *scale,
+                                                                           const int32_t *zp,
+                                                                           int8_t *dst,
+                                                                           size_t vl)
 {
-    (void)src;
+    (void)vacc;
     (void)scale;
     (void)zp;
     (void)dst;
-    (void)len;
+    (void)vl;
     printf("Unknown activation type in requantize_activate_store_rvv.\n");
     exit(EXIT_FAILURE);
 }
 
-static const requantize_store_kernel_t kRequantizeStoreKernels[ACTIVATION_KERNEL_COUNT] = {
-    [RELU] = requantize_store_relu_rvv,
-    [SIGMOID] = requantize_store_unsupported_sigmoid,
-    [TANH] = requantize_store_tanh_scalar,
-    [LEAKY_RELU] = requantize_store_leaky_relu_scalar,
-    [SOFTMAX] = requantize_store_unsupported_softmax,
-    [NONE] = requantize_store_none_rvv,
+static const requantize_store_chunk_i8_asym_per_channel_kernel_t
+    kRequantizeStoreChunkI8AsymPerChannelKernels[ACTIVATION_KERNEL_COUNT] = {
+    [RELU] = requantize_store_chunk_i8_asym_per_channel_relu,
+    [SIGMOID] = requantize_store_chunk_i8_asym_per_channel_sigmoid,
+    [TANH] = requantize_store_chunk_i8_asym_per_channel_tanh,
+    [LEAKY_RELU] = requantize_store_chunk_i8_asym_per_channel_leaky_relu,
+    [SOFTMAX] = requantize_store_chunk_i8_asym_per_channel_unsupported_softmax,
+    [NONE] = requantize_store_chunk_i8_asym_per_channel_none,
 };
 
-requantize_store_kernel_t select_requantize_store_kernel(ActivationType act)
+requantize_store_chunk_i8_asym_per_channel_kernel_t
+select_requantize_store_chunk_i8_asym_per_channel_kernel(ActivationType act)
 {
-    if ((unsigned)act < ACTIVATION_KERNEL_COUNT && kRequantizeStoreKernels[act] != NULL) {
-        return kRequantizeStoreKernels[act];
+    if ((unsigned)act < ACTIVATION_KERNEL_COUNT &&
+        kRequantizeStoreChunkI8AsymPerChannelKernels[act] != NULL) {
+        return kRequantizeStoreChunkI8AsymPerChannelKernels[act];
     }
-    return requantize_store_unsupported_unknown;
-}
-
-void requantize_activate_store_rvv(const int32_t *src,
-                                   const float *scale,
-                                   const int32_t *zp,
-                                   int8_t *dst,
-                                   int len,
-                                   ActivationType act)
-{
-    requantize_store_kernel_t kernel = select_requantize_store_kernel(act);
-    kernel(src, scale, zp, dst, len);
+    return requantize_store_chunk_i8_asym_per_channel_unsupported_unknown;
 }

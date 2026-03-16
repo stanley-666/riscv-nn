@@ -75,7 +75,7 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         printf("Inference time: %.6f seconds\n", elapsed_time);
 
         // print output
-        int8_t *output = (int8_t *) buffer1;
+        const int8_t *output = (int8_t *)((model->numModules % 2 == 0) ? buffer1 : buffer2);
         printf("Ground truth (valid_embedding): %d\n", valid_embedding);
         float prob = output[0];
         int pred = prob >= 0.5f;
@@ -124,7 +124,7 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
             bool label = test_labels[i];
 
             forward(model, (void *)embedding);
-            int8_t *output = (int8_t *) buffer1;  // 最後輸出在 buffer1
+            int8_t *output = (int8_t *) ((model->numModules % 2 == 0) ? buffer1 : buffer2);  // 最後輸出在 buffer1
 
 
             if (output[0] == label) {
@@ -156,7 +156,6 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         NNModule *conv1 = nn_Conv1d(1, 384, 5, 64, 1, 2, RELU, conv1_weight, conv1_bias, conv1_M, conv1_zero_points, ELEM_INT8);
         NNModule *conv2 = nn_Conv1d(64, conv1->outputShape.W, 5, 128, 1, 2, RELU, conv2_weight, conv2_bias, conv2_M, conv2_zero_points, ELEM_INT8);
         NNModule *conv3 = nn_Conv1d(128, conv2->outputShape.W, 3, 256, 1, 1, RELU, conv3_weight, conv3_bias, conv3_M, conv3_zero_points, ELEM_INT8);
-        NNModule *transposed_conv3 = nn_Transpose(conv3->outputShape.W, conv3->outputShape.C, TRANSPOSE_WC_TO_CW, ELEM_INT8);
         NNModule *maxpool = nn_AdaptiveMaxPool1d(conv3->outputShape.C, conv3->outputShape.W, 1, ELEM_INT8);
         NNModule *fc1 = nn_Linear(maxpool->outputShape.C * maxpool->outputShape.W, 128, RELU, fc1_weight, fc1_bias, fc1_M, fc1_zero_points, ELEM_INT8);
         NNModule *fc2 = nn_Linear(128, 1, NONE, fc2_weight, fc2_bias, fc2_M, fc2_zero_points, ELEM_INT8);
@@ -165,7 +164,6 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         addLayer(model, conv1);
         addLayer(model, conv2);
         addLayer(model, conv3);
-        addLayer(model, transposed_conv3);
         addLayer(model, maxpool);
         addLayer(model, fc1);
         addLayer(model, fc2);
@@ -179,10 +177,7 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         forward_int8_vpu(model, (void *)embedding);
         uint64_t end_cycle = read_rdcycle();
         clock_t end_time = clock();
-        uint64_t cycle_diff = end_cycle - start_cycle;
-        printf("Inference cycles: %lu cycles\n", cycle_diff);
-        double elapsed_time = (double)(end_time - start_time);
-        const int8_t *output = (int8_t *)buffer1;
+        const int8_t *output = (int8_t *)((model->numModules % 2 == 0) ? buffer1 : buffer2);
         printf("Model prediction (output[0]): %d\n", output[0]);
         if (output[0] == label) {
             printf("correct\n");
@@ -191,6 +186,9 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
             printf("false\n");
         }
 
+        uint64_t cycle_diff = end_cycle - start_cycle;
+        double elapsed_time = (double)(end_time - start_time);
+        printf("Inference cycles: %lu cycles\n", cycle_diff);
         elapsed_time = elapsed_time / CLOCKS_PER_SEC;
         printf("Inference time: %.6f seconds\n", elapsed_time);
         freeCNN(model);
@@ -204,7 +202,6 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         NNModule *conv1 = nn_Conv1d(1, 384, 5, 64, 1, 2, RELU, conv1_weight, conv1_bias, conv1_M, conv1_zero_points, ELEM_INT8);
         NNModule *conv2 = nn_Conv1d(64, conv1->outputShape.W, 5, 128, 1, 2, RELU, conv2_weight, conv2_bias, conv2_M, conv2_zero_points, ELEM_INT8);
         NNModule *conv3 = nn_Conv1d(128, conv2->outputShape.W, 3, 256, 1, 1, RELU, conv3_weight, conv3_bias, conv3_M, conv3_zero_points, ELEM_INT8);
-        NNModule *transposed_conv3 = nn_Transpose(conv3->outputShape.W, conv3->outputShape.C, TRANSPOSE_WC_TO_CW, ELEM_INT8);
         NNModule *maxpool = nn_AdaptiveMaxPool1d(conv3->outputShape.C, conv3->outputShape.W, 1, ELEM_INT8);
         NNModule *fc1 = nn_Linear(maxpool->outputShape.C * maxpool->outputShape.W, 128, NONE, fc1_weight, fc1_bias, fc1_M, fc1_zero_points, ELEM_INT8);
         NNModule *fc2 = nn_Linear(128, 1, SIGMOID, fc2_weight, fc2_bias, fc2_M, fc2_zero_points, ELEM_INT8);
@@ -213,7 +210,6 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         addLayer(model, conv1);
         addLayer(model, conv2);
         addLayer(model, conv3);
-        addLayer(model, transposed_conv3);
         addLayer(model, maxpool);
         addLayer(model, fc1);
         addLayer(model, fc2);
@@ -228,7 +224,7 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
             forward_int8_vpu(model, (void *)embedding);
             clock_t end_time = clock();
             elapsed_time += (double)(end_time - start_time);
-            const int8_t *output = (int8_t *)buffer2;
+            const int8_t *output = (int8_t *)((model->numModules % 2 == 0) ? buffer1 : buffer2);
             printf("Output[%d]: %d, Label: %d\n", i, output[0], label);
             if (output[0] == label) {
                 printf("[%d] correct\n", i);

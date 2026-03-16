@@ -56,7 +56,7 @@ void forward_int8_vpu(CNN *net, void *input)
             break;
         case POOL1D:
             if (currentLayer->params.pool.type == AdaptiveMaxPool1d) {
-                AdaptiveMaxPool1d_int8_vpu(currentLayer, src, dst);
+                AdaptiveMaxPool1d_wc_int8_vpu(currentLayer, src, dst);
             } else if (currentLayer->params.pool.type == MAX_POOL) {
                 maxpool1d_int8_vpu(currentLayer, src, dst);
             } else {
