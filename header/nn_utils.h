@@ -22,6 +22,8 @@ void softmax_f32(const float *input, float *output, int len);
 
 void *padded_input_create_nchw(NNModule *layer, const void *input) ;
 void *padded_input_create_nhwc(NNModule *layer, const void *input) ;
+void *input_im2col_create_nhwc_1d(NNModule *layer, const void *input);
+void *input_im2col_create_nhwc_2d(NNModule *layer, const void *input);
 void *padded_input_create_nchw_2d(NNModule *layer, const void *input);
 void *padded_input_create_nhwc_2d(NNModule *layer, const void *input);
 // clipping

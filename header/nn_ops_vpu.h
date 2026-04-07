@@ -10,9 +10,13 @@
 
 void conv1d_i8_vpu(NNModule *layer, void *input, void *output);
 void conv1d_fp32_vpu(NNModule *layer, void *input, void *output);
+void conv1d_i8_vpu_im2col(NNModule *layer, void *input, void *output);
+void conv1d_fp32_vpu_im2col(NNModule *layer, void *input, void *output);
 
 void conv2d_int8_vpu(NNModule *layer, void *input, void *output);
 void conv2d_fp32_vpu(NNModule *layer, void *input, void *output);
+void conv2d_int8_vpu_im2col(NNModule *layer, void *input, void *output);
+void conv2d_fp32_vpu_im2col(NNModule *layer, void *input, void *output);
 
 void maxpool1d_int8_vpu(NNModule *layer, void *input, void *output);
 void maxpool1d_fp32_vpu(NNModule *layer, void *input, void *output);

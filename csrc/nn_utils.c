@@ -185,6 +185,122 @@ void *padded_input_create_nhwc(NNModule *layer, const void *input) {
     return padded_input;
 }
 
+void *input_im2col_create_nhwc_1d(NNModule *layer, const void *input)
+{
+    int outW = layer->outputShape.W;
+    int inC = layer->inputShape.C;
+    int filterSize = layer->params.conv.filterSize;
+    int stride = layer->params.conv.stride;
+    int cols = filterSize * inC;
+    elem_type dtype = layer->dtype;
+
+    void *padded_input = padded_input_create_nhwc(layer, input);
+    void *im2col = safe_malloc((size_t)outW * cols * sizeof_dtype(dtype));
+
+    switch (dtype) {
+    case ELEM_FLOAT32: {
+        const float *src = (const float *)padded_input;
+        float *dst = (float *)im2col;
+
+        for (int pos = 0; pos < outW; ++pos) {
+            float *dst_row = &dst[pos * cols];
+            for (int k = 0; k < filterSize; ++k) {
+                const float *src_pos = &src[(pos * stride + k) * inC];
+                memcpy(&dst_row[k * inC], src_pos, inC * sizeof(float));
+            }
+        }
+        break;
+    }
+    case ELEM_INT8: {
+        const int8_t *src = (const int8_t *)padded_input;
+        int8_t *dst = (int8_t *)im2col;
+
+        for (int pos = 0; pos < outW; ++pos) {
+            int8_t *dst_row = &dst[pos * cols];
+            for (int k = 0; k < filterSize; ++k) {
+                const int8_t *src_pos = &src[(pos * stride + k) * inC];
+                memcpy(&dst_row[k * inC], src_pos, inC * sizeof(int8_t));
+            }
+        }
+        break;
+    }
+    default:
+        printf("Unsupported dtype in 1d NHWC im2col\n");
+        exit(EXIT_FAILURE);
+    }
+
+    if (layer->params.conv.padding > 0)
+        safe_free(padded_input);
+
+    return im2col;
+}
+
+void *input_im2col_create_nhwc_2d(NNModule *layer, const void *input)
+{
+    int outH = layer->outputShape.H;
+    int outW = layer->outputShape.W;
+    int inC = layer->inputShape.C;
+    int filterSize = layer->params.conv2d.filterSize;
+    int stride = layer->params.conv2d.stride;
+    int cols = filterSize * filterSize * inC;
+    elem_type dtype = layer->dtype;
+    void *padded_input = padded_input_create_nhwc_2d(layer, input);
+    void *im2col = safe_malloc((size_t)outH * outW * cols * sizeof_dtype(dtype));
+
+    switch (dtype) {
+    case ELEM_FLOAT32: {
+        const float *src = (const float *)padded_input;
+        float *dst = (float *)im2col;
+        int paddedW = layer->inputShape.W + 2 * layer->params.conv2d.padding;
+
+        for (int oh = 0; oh < outH; ++oh) {
+            int base_h = oh * stride;
+            for (int ow = 0; ow < outW; ++ow) {
+                int base_w = ow * stride;
+                float *dst_row = &dst[((oh * outW) + ow) * cols];
+                for (int kh = 0; kh < filterSize; ++kh) {
+                    for (int kw = 0; kw < filterSize; ++kw) {
+                        int col_idx = (kh * filterSize + kw) * inC;
+                        const float *src_pos = &src[((base_h + kh) * paddedW + (base_w + kw)) * inC];
+                        memcpy(&dst_row[col_idx], src_pos, inC * sizeof(float));
+                    }
+                }
+            }
+        }
+        break;
+    }
+    case ELEM_INT8: {
+        const int8_t *src = (const int8_t *)padded_input;
+        int8_t *dst = (int8_t *)im2col;
+        int paddedW = layer->inputShape.W + 2 * layer->params.conv2d.padding;
+
+        for (int oh = 0; oh < outH; ++oh) {
+            int base_h = oh * stride;
+            for (int ow = 0; ow < outW; ++ow) {
+                int base_w = ow * stride;
+                int8_t *dst_row = &dst[((oh * outW) + ow) * cols];
+                for (int kh = 0; kh < filterSize; ++kh) {
+                    for (int kw = 0; kw < filterSize; ++kw) {
+                        int col_idx = (kh * filterSize + kw) * inC;
+                        const int8_t *src_pos = &src[((base_h + kh) * paddedW + (base_w + kw)) * inC];
+                        memcpy(&dst_row[col_idx], src_pos, inC * sizeof(int8_t));
+                    }
+                }
+            }
+        }
+        break;
+    }
+    default:
+        printf("Unsupported dtype in 2d NHWC im2col\n");
+        exit(EXIT_FAILURE);
+    }
+
+    if (layer->params.conv2d.padding > 0)
+        safe_free(padded_input);
+
+    return im2col;
+}
+
 void *padded_input_create_nchw_2d(NNModule *layer, const void *input) {
     int inH = layer->inputShape.H;
     int inW = layer->inputShape.W;

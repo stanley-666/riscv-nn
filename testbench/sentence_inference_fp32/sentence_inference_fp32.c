@@ -10,8 +10,8 @@
 
 #include "weights_fp32.h"
 #include "random_embedding.h"
-#include "test_dataset_2658.h"
-//#include "test_dataset.h"
+//#include "test_dataset_2658.h"
+#include "test_dataset.h"
 
 #define SENTENCE_FP32_MAX_ELEMS (384 * 256)  // max tensor elements across the model
 static float buffer1_static[SENTENCE_FP32_MAX_ELEMS] __attribute__((aligned(64)));
