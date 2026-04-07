@@ -42,7 +42,6 @@ void conv1d_i8_vpu(NNModule *layer, void *input, void *output)
         for (int oc = 0; oc < outC; ) {
             size_t vl = __riscv_vsetvl_e16m4(outC - oc);
             vint32m8_t vacc = __riscv_vle32_v_i32m8(&bias_i32[oc], vl);
-
             for (int k = 0; k < filterSize; ++k) {
                 const int8_t *in_ptr = &input_i8[(pos * stride + k) * inC];
                 for (int ic = 0; ic < inC; ++ic) {
@@ -84,8 +83,6 @@ void conv1d_fp32_vpu(NNModule *layer, void *input, void *output)
     const float *bias_f32    = (const float *)layer->params.conv.bias;
     const float *weight_buffer = (const float *)layer->params.conv.weights_rvv; // (K*inC, outC) 佈局
     activate_store_chunk_kernel_f32_t act_kernel = select_activate_store_chunk_kernel_f32(layer->activation);
-
-    //float *acc_buffer = (float *)layer->params.conv.acc_buffer;
 
     /* Reorder kernel to (K * inC, outC) layout for contiguous vector loads */
 
@@ -141,8 +138,7 @@ void conv2d_int8_vpu(NNModule *layer, void *input, void *output)
     const int16_t *weight_buffer = (const int16_t *)layer->params.conv2d.weights_rvv;
     const float *M = (const float *)layer->params.conv2d.M;
     const int32_t *Z = (const int32_t *)layer->params.conv2d.zps;
-    requantize_store_chunk_i8_asym_per_channel_kernel_t act_kernel =
-        select_requantize_store_chunk_i8_asym_per_channel_kernel(layer->activation);
+    requantize_store_chunk_i8_asym_per_channel_kernel_t act_kernel = select_requantize_store_chunk_i8_asym_per_channel_kernel(layer->activation);
 
     if (!weight_buffer) {
         printf("Error: conv2d weights_rvv not initialized.\n");
@@ -634,8 +630,7 @@ void fullyconnected_int8_vpu(NNModule *layer, void *input, void *output)
     const float *M = (const float *)layer->params.fc.M;
     const int32_t *Z = (const int32_t *)layer->params.fc.zps; // zero point
     const int16_t *wt_T = (const int16_t *)layer->params.fc.weights_rvv;
-    requantize_store_chunk_i8_asym_per_channel_kernel_t rq_kernel =
-        select_requantize_store_chunk_i8_asym_per_channel_kernel(layer->activation);
+    requantize_store_chunk_i8_asym_per_channel_kernel_t rq_kernel = select_requantize_store_chunk_i8_asym_per_channel_kernel(layer->activation);
 
     for (int o = 0; o < outW; ) {
         size_t vl = __riscv_vsetvl_e16m4(outW - o);

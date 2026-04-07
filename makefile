@@ -58,7 +58,7 @@ ifeq ($(CONFIG), zvl512b_cycle)
 endif
 
 ifeq ($(CONFIG), RVV)
-  ARCH := rv64imafdcv_zicsr_zifencei_zihpm_zaamo_zalrsc_zfh_zca_zcd_zba_zbb_zbs_zvbb_zve32f_zve32x_zve64d_zve64f_zve64x_zvfh_zvkb
+  ARCH := rv64imafdcbvzicsr_zifencei_zihpm_zvl256b_zve64d_zvfh_zfh_zba_zbb_zbs_zvbb
   ABI  := lp64d
   TUNE := rocket
 endif
@@ -77,8 +77,16 @@ endif
 
 # RISC-V gnu Compiler flags
 CFLAGS  := -O3 -march=$(ARCH) -mabi=$(ABI) -Wall -Wextra -std=c11 $(INCLUDE)
-# Static linking
-LDFLAGS := -static
+# Linker flags for Linux dynamic and pk/static builds
+DYNAMIC_LDFLAGS :=
+STATIC_LDFLAGS  := -static
+# Keep the legacy target behavior configurable.
+LINK_MODE ?= dynamic
+ifeq ($(LINK_MODE),static)
+  LDFLAGS := $(STATIC_LDFLAGS)
+else
+  LDFLAGS := $(DYNAMIC_LDFLAGS)
+endif
 # Libraries
 LIBS    := -lm -u _printf_float -lc
 
@@ -92,6 +100,12 @@ all: $(TB_BINS)
 define TB_template
 $(notdir $(1:.c=)): $(patsubst testbench/%.c,$(OBJ_DIR)/testbench/%.o,$(1)) $(CORE_OBJS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $$@ $$^ ${LIBS}
+
+$(notdir $(1:.c=))_dynamic: $(patsubst testbench/%.c,$(OBJ_DIR)/testbench/%.o,$(1)) $(CORE_OBJS)
+	$(CC) $(CFLAGS) $(DYNAMIC_LDFLAGS) -o $$@ $$^ ${LIBS}
+
+$(notdir $(1:.c=))_static: $(patsubst testbench/%.c,$(OBJ_DIR)/testbench/%.o,$(1)) $(CORE_OBJS)
+	$(CC) $(CFLAGS) $(STATIC_LDFLAGS) -o $$@ $$^ ${LIBS}
 endef
 $(foreach src,$(TB_SRCS),$(eval $(call TB_template,$(src))))
 
