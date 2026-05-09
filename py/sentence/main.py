@@ -189,6 +189,89 @@ def export_quantized_weights_gemmini(model_int8, filename="weights_q_gemmini.h")
         f.write("#endif // WEIGHTS_Q_GEMMINI_H\n")
     print(f"✅ Quantized weights (Gemmini layout) exported to {filename}")
 
+
+def _write_nested_c_array(f, c_type, name, arr):
+    arr = np.asarray(arr)
+    dims = "".join(f"[{dim}]" for dim in arr.shape)
+    f.write(f"{c_type} {name}{dims} = ")
+
+    def emit(x, indent):
+        if x.ndim == 1:
+            f.write("{" + ",".join(str(int(v)) for v in x) + "}")
+            return
+        f.write("{\n")
+        for item in x:
+            f.write(" " * indent)
+            emit(item, indent + 4)
+            f.write(",\n")
+        f.write(" " * (indent - 4) + "}")
+
+    emit(arr, 4)
+    f.write(";\n\n")
+
+
+def _conv1d_to_gemmini_hwio_square(w_int8):
+    if w_int8.ndim != 3:
+        raise RuntimeError(f"Expected Conv1d weight O,I,K, got {w_int8.shape}")
+    out_ch, in_ch, kernel = w_int8.shape
+    hwio = np.zeros((kernel, kernel, in_ch, out_ch), dtype=np.int8)
+    center_h = kernel // 2
+    for out_idx in range(out_ch):
+        for in_idx in range(in_ch):
+            hwio[center_h, :, in_idx, out_idx] = w_int8[out_idx, in_idx, :]
+    return hwio
+
+
+def export_gemmini_native_weights(model_int8, filename="weights_gemmini_native.h"):
+    modules = dict(model_int8.named_modules())
+    ordered_layers = ["conv1", "conv2", "conv3", "fc1", "fc2"]
+    prev_scale = 1.0
+    requant_scales = {}
+
+    for name in ordered_layers:
+        module = modules.get(name)
+        if module is None or not hasattr(module, "weight") or module.weight() is None:
+            raise RuntimeError(f"Missing quantized module: {name}")
+
+        w_q = module.weight()
+        qscheme = w_q.qscheme()
+        if qscheme not in (torch.per_tensor_symmetric, torch.per_tensor_affine):
+            raise RuntimeError(
+                f"{name} is {qscheme}; rerun calibration with --calibration_qscheme per_tensor_gemmini"
+            )
+
+        s_weight = float(w_q.q_scale())
+        s_out = float(getattr(module, "scale", 1.0))
+        requant_scales[name] = (prev_scale * s_weight) / s_out
+        prev_scale = s_out
+
+    conv1_hwio = _conv1d_to_gemmini_hwio_square(modules["conv1"].weight().int_repr().cpu().numpy())
+    conv2_hwio = _conv1d_to_gemmini_hwio_square(modules["conv2"].weight().int_repr().cpu().numpy())
+    conv3_hwio = _conv1d_to_gemmini_hwio_square(modules["conv3"].weight().int_repr().cpu().numpy())
+    pool_identity_1x1_hwio = np.zeros((1, 1, 256, 256), dtype=np.int8)
+    for idx in range(256):
+        pool_identity_1x1_hwio[0, 0, idx, idx] = 1
+
+    guard = os.path.basename(filename).upper().replace(".", "_").replace("-", "_")
+    with open(filename, "w") as f:
+        f.write(f"#ifndef {guard}\n#define {guard}\n\n")
+        f.write("// Generated for Gemmini-native timing path.\n")
+        f.write("// Requires per-tensor symmetric weight calibration.\n")
+        f.write("// Conv1d weights are embedded as square HWIO kernels for tiled_conv_auto.\n\n")
+
+        for name in ordered_layers:
+            macro = f"{name.upper()}_REQUANT_SCALE"
+            f.write(f"#ifndef {macro}\n#define {macro} {requant_scales[name]:.8f}f\n#endif\n")
+        f.write("\n")
+
+        _write_nested_c_array(f, "elem_t", "conv1_weight_hwio", conv1_hwio)
+        _write_nested_c_array(f, "elem_t", "conv2_weight_hwio", conv2_hwio)
+        _write_nested_c_array(f, "elem_t", "conv3_weight_hwio", conv3_hwio)
+        _write_nested_c_array(f, "elem_t", "pool_identity_1x1_hwio", pool_identity_1x1_hwio)
+        f.write(f"#endif // {guard}\n")
+
+    print(f"✅ Gemmini native per-tensor weights exported to {filename}")
+
 def main():
     parser = argparse.ArgumentParser(description='Train sentence validity classification model')
     parser.add_argument('--csv_file', type=str, default="embeddings/test_rest_int8.csv", help='Training data CSV file path')
@@ -200,6 +283,7 @@ def main():
     parser.add_argument('--save_model', type=str, default='sentence_cnn_model.pth', help='Model save filename')
     parser.add_argument('--save_weights', type=str, default='weights/best_weights.pth', help='Save best weights filename')
     parser.add_argument('--mode', type=str, choices=['train', 'inference', 'calibration', 'test', 'onnx'], default='train', help='Run mode: train or inference')
+    parser.add_argument('--calibration_qscheme', type=str, choices=['per_channel', 'per_tensor_gemmini'], default='per_tensor_gemmini', help='Weight observer for calibration export')
 
     args = parser.parse_args()
     
@@ -385,16 +469,34 @@ def main():
         model_fp32.load_state_dict(checkpoint["model_state_dict"])
         model_fp32.eval()
 
+        if args.calibration_qscheme == "per_tensor_gemmini":
+            weight_observer = tq.MinMaxObserver.with_args(
+                dtype=torch.qint8,
+                qscheme=torch.per_tensor_symmetric
+            )
+            int8_checkpoint = "weights/sentence_cnn_int8_gemmini_per_tensor.pth"
+            c_header = "weights_q_gemmini_per_tensor_ref.h"
+            gemmini_header = "weights_q_gemmini_per_tensor.h"
+            native_header = "weights_gemmini_native_per_tensor.h"
+            print("Calibration qscheme: per-tensor symmetric weights for Gemmini")
+        else:
+            weight_observer = tq.PerChannelMinMaxObserver.with_args(
+                dtype=torch.qint8,
+                qscheme=torch.per_channel_symmetric
+            )
+            int8_checkpoint = "weights/sentence_cnn_int8.pth"
+            c_header = "weights_q.h"
+            gemmini_header = "weights_q_gemmini.h"
+            native_header = None
+            print("Calibration qscheme: per-channel symmetric weights")
+
         # fbgemm 適用 x86 看用哪種統計模型來做觀測
         model_fp32.qconfig = tq.QConfig(
             activation=tq.HistogramObserver.with_args(
                 dtype=torch.qint8,
                 qscheme=torch.per_tensor_symmetric  # C 端只支援 zp=0
             ),
-            weight=tq.PerChannelMinMaxObserver.with_args(
-                dtype=torch.qint8,
-                qscheme=torch.per_channel_symmetric
-            )
+            weight=weight_observer
         )
         # 自動插入 observer
         tq.prepare(model_fp32, inplace=True)
@@ -423,16 +525,18 @@ def main():
         """
         model_int8 = tq.convert(model_fp32, inplace=False)
 
-        export_quantized_weights(model_int8, "weights_q.h")
-        print("✅ Quantized weights exported to weights_q.h")
+        export_quantized_weights(model_int8, c_header)
+        print(f"✅ Quantized weights exported to {c_header}")
         torch.save({
         "model_state_dict": model_int8.state_dict(),
         "qconfig": str(model_fp32.qconfig),
-        }, "weights/sentence_cnn_int8.pth")
+        }, int8_checkpoint)
         
         
-        export_quantized_weights_gemmini(model_int8, "weights_q_gemmini.h")
-        print("✅ Quantized weights exported to weights_q_gemmini.h")
+        export_quantized_weights_gemmini(model_int8, gemmini_header)
+        print(f"✅ Quantized weights exported to {gemmini_header}")
+        if native_header is not None:
+            export_gemmini_native_weights(model_int8, native_header)
         for name, module in model_int8.named_modules():
             if hasattr(module, "scale") and hasattr(module, "zero_point"):
                 print(f"{name}: scale={module.scale}, zp={module.zero_point}")

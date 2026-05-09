@@ -21,6 +21,19 @@ python main.py --mode inference
 python main.py --mode calibration
 ```
 
+### Gemmini per-tensor calibration
+```python
+python main.py --mode calibration --calibration_qscheme per_tensor_gemmini
+```
+
+This reruns calibration with per-tensor symmetric weights for Gemmini. It emits:
+`weights/sentence_cnn_int8_gemmini_per_tensor.pth`,
+`weights_q_gemmini_per_tensor.h`, and `weights_gemmini_native_per_tensor.h`.
+
+Use `weights_gemmini_native_per_tensor.h` for the Gemmini native timing path,
+then keep `weights_q_gemmini_per_tensor.h` as the matching bias/FC/reference
+metadata. The original per-channel headers remain separate.
+
 ### INT8 Inference
 ```python
 # 使用校正後的同一份權重；PyTorch 沒有 AdaptiveMaxPool1d 的量化 kernel，
@@ -34,6 +47,19 @@ python int8_infer.py --csv_file embeddings/test_rest_int8.csv --weight_path weig
 python dump_logit.py --csv embeddings/test_rest_int8.csv --row 2658 --weights weights/sentence_cnn_int8.pth
 # 輸出 reference_logit.txt，含 pre-sigmoid logit 與 prob
 ```
+
+### Gemmini timing-oriented export from an existing checkpoint
+```python
+python export_gemmini_timing_header.py \
+  --weights weights/sentence_cnn_int8.pth \
+  --out weights_gemmini_timing.h \
+  --scale-mode first
+```
+
+This export is for Gemmini dataflow latency experiments, not accuracy parity with
+the RVV/per-channel path. It emits HWIO Conv1d weights embedded into square 2D
+kernels, scalar per-tensor requant scales for Gemmini store scaling, and a 1x1
+identity kernel for staged Gemmini pooling.
 
 ## Quantization strategy
 - Post-training static quantization with PyTorch observers (`torch.quantization`): `HistogramObserver` for activations (qint8, per-tensor symmetric, zero-point forced to 0) and `PerChannelMinMaxObserver` for weights (qint8, per-channel symmetric).

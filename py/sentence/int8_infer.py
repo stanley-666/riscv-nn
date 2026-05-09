@@ -11,21 +11,31 @@ import matplotlib.pyplot as plt
 from sentence_infer import SentenceCNN, SentenceBERTDataset
 
 
-def build_quantized_model(device: torch.device) -> torch.nn.Module:
+def build_quantized_model(device: torch.device, qscheme: str) -> torch.nn.Module:
     """
     Recreate the static-quantized SentenceCNN structure used during calibration,
     then load quantized weights into it.
     """
     model = SentenceCNN()
-    model.qconfig = tq.QConfig(
-        activation=tq.HistogramObserver.with_args(
-            dtype=torch.quint8,
-            qscheme=torch.per_tensor_affine,  # fbgemm conv expects quint8 activations
-        ),
-        weight=tq.PerChannelMinMaxObserver.with_args(
+    if qscheme == "per_tensor_gemmini":
+        weight_observer = tq.MinMaxObserver.with_args(
+            dtype=torch.qint8,
+            qscheme=torch.per_tensor_symmetric,
+        )
+    elif qscheme == "per_channel":
+        weight_observer = tq.PerChannelMinMaxObserver.with_args(
             dtype=torch.qint8,
             qscheme=torch.per_channel_symmetric,
+        )
+    else:
+        raise ValueError(f"Unsupported qscheme: {qscheme}")
+
+    model.qconfig = tq.QConfig(
+        activation=tq.HistogramObserver.with_args(
+            dtype=torch.qint8,
+            qscheme=torch.per_tensor_symmetric,
         ),
+        weight=weight_observer,
     )
     # Insert observers and immediately convert to get matching quantized module types,
     # so the checkpoint keys line up.
@@ -70,12 +80,12 @@ def load_dataset(csv_path: str):
     return dataset, X, y
 
 
-def run_inference(csv_path: str, weight_path: str, batch_size: int, out_csv: str):
+def run_inference(csv_path: str, weight_path: str, batch_size: int, out_csv: str, qscheme: str):
     torch.backends.quantized.engine = "fbgemm"
     device = torch.device("cpu")
 
     # Build quantized model shell then load quantized weights produced by calibration.
-    model = build_quantized_model(device)
+    model = build_quantized_model(device, qscheme)
     checkpoint = torch.load(weight_path, map_location=device)
     state = checkpoint["model_state_dict"] if "model_state_dict" in checkpoint else checkpoint
     model.load_state_dict(state)
@@ -86,7 +96,7 @@ def run_inference(csv_path: str, weight_path: str, batch_size: int, out_csv: str
     # Fallback: dequantize weights into a fresh float model to avoid missing quantized kernels.
     model = dequantize_to_float_model(model)
     model.to(device)
-    print("ℹ️ Quantized checkpoint loaded; running inference in float fallback (dequantized weights).")
+    print(f"ℹ️ Quantized checkpoint loaded ({qscheme}); running inference in float fallback (dequantized weights).")
 
     preds = []
     with torch.no_grad():
@@ -138,8 +148,15 @@ def main():
     parser.add_argument(
         "--weight_path",
         type=str,
-        default="weights/sentence_cnn_int8.pth",
+        default="weights/sentence_cnn_int8_gemmini_per_tensor.pth",
         help="Quantized checkpoint produced by calibration",
+    )
+    parser.add_argument(
+        "--qscheme",
+        type=str,
+        choices=["per_tensor_gemmini", "per_channel"],
+        default="per_tensor_gemmini",
+        help="Quantized shell layout used to load the checkpoint",
     )
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size for inference")
     parser.add_argument(
@@ -150,7 +167,7 @@ def main():
     )
     args = parser.parse_args()
 
-    run_inference(args.csv_file, args.weight_path, args.batch_size, args.out_csv)
+    run_inference(args.csv_file, args.weight_path, args.batch_size, args.out_csv, args.qscheme)
 
 
 if __name__ == "__main__":
