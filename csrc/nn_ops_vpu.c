@@ -846,6 +846,161 @@ void fullyconnected_fp32_vpu(NNModule *layer, void *input, void *output)
     }
 }
 
+static void linear_rows_fp32_rvv(const float *input,
+                                 int rows,
+                                 int inDim,
+                                 int outDim,
+                                 const float *wt_T,
+                                 const float *bias,
+                                 float *output)
+{
+    for (int r = 0; r < rows; ++r) {
+        const float *row = &input[r * inDim];
+        float *dst = &output[r * outDim];
+        for (int o = 0; o < outDim; ) {
+            size_t vl = __riscv_vsetvl_e32m8(outDim - o);
+            vfloat32m8_t vacc = __riscv_vle32_v_f32m8(&bias[o], vl);
+            for (int i = 0; i < inDim; ++i) {
+                float inval = row[i];
+                if (inval == 0.0f) continue;
+                const float *wt_ptr = &wt_T[i * outDim + o];
+                vfloat32m8_t vwt = __riscv_vle32_v_f32m8(wt_ptr, vl);
+                vacc = __riscv_vfmacc_vf_f32m8(vacc, inval, vwt, vl);
+            }
+            __riscv_vse32_v_f32m8(&dst[o], vacc, vl);
+            o += (int)vl;
+        }
+    }
+}
+
+void layernorm1d_fp32_vpu(NNModule *layer, void *input, void *output)
+{
+    if (layer->dtype != ELEM_FLOAT32) {
+        printf("Unsupported dtype in layernorm1d_fp32_vpu\n");
+        exit(EXIT_FAILURE);
+    }
+
+    int width = layer->inputShape.W;
+    int channels = layer->inputShape.C;
+    const float *input_f32 = (const float *)input;
+    float *output_f32 = (float *)output;
+    const float *weight = (const float *)layer->params.layernorm.weight;
+    const float *bias = (const float *)layer->params.layernorm.bias;
+    const float eps = layer->params.layernorm.eps;
+
+    for (int w = 0; w < width; ++w) {
+        const float *row = &input_f32[w * channels];
+        float *dst = &output_f32[w * channels];
+        double sum = 0.0;
+        for (int c = 0; c < channels; ) {
+            size_t vl = __riscv_vsetvl_e32m8(channels - c);
+            vfloat32m8_t vx = __riscv_vle32_v_f32m8(&row[c], vl);
+            vfloat32m1_t init = __riscv_vfmv_s_f_f32m1(0.0f, 1);
+            vfloat32m1_t red = __riscv_vfredusum_vs_f32m8_f32m1(vx, init, vl);
+            sum += (double)__riscv_vfmv_f_s_f32m1_f32(red);
+            c += (int)vl;
+        }
+        float mean = (float)(sum / (double)channels);
+
+        double var_sum = 0.0;
+        for (int c = 0; c < channels; ) {
+            size_t vl = __riscv_vsetvl_e32m8(channels - c);
+            vfloat32m8_t vx = __riscv_vle32_v_f32m8(&row[c], vl);
+            vx = __riscv_vfsub_vf_f32m8(vx, mean, vl);
+            vx = __riscv_vfmul_vv_f32m8(vx, vx, vl);
+            vfloat32m1_t init = __riscv_vfmv_s_f_f32m1(0.0f, 1);
+            vfloat32m1_t red = __riscv_vfredusum_vs_f32m8_f32m1(vx, init, vl);
+            var_sum += (double)__riscv_vfmv_f_s_f32m1_f32(red);
+            c += (int)vl;
+        }
+        float inv_std = 1.0f / sqrtf((float)(var_sum / (double)channels) + eps);
+
+        for (int c = 0; c < channels; ) {
+            size_t vl = __riscv_vsetvl_e32m8(channels - c);
+            vfloat32m8_t vx = __riscv_vle32_v_f32m8(&row[c], vl);
+            vfloat32m8_t vw = __riscv_vle32_v_f32m8(&weight[c], vl);
+            vfloat32m8_t vb = __riscv_vle32_v_f32m8(&bias[c], vl);
+            vx = __riscv_vfsub_vf_f32m8(vx, mean, vl);
+            vx = __riscv_vfmul_vf_f32m8(vx, inv_std, vl);
+            vx = __riscv_vfmul_vv_f32m8(vx, vw, vl);
+            vx = __riscv_vfadd_vv_f32m8(vx, vb, vl);
+            __riscv_vse32_v_f32m8(&dst[c], vx, vl);
+            c += (int)vl;
+        }
+    }
+}
+
+void attention1d_fp32_vpu(NNModule *layer, void *input, void *output)
+{
+    if (layer->dtype != ELEM_FLOAT32) {
+        printf("Unsupported dtype in attention1d_fp32_vpu\n");
+        exit(EXIT_FAILURE);
+    }
+
+    int seq_len = layer->inputShape.W;
+    int embed_dim = layer->inputShape.C;
+    int qkv_dim = embed_dim * 3;
+    int num_heads = layer->params.attention.num_heads;
+    int head_dim = layer->params.attention.head_dim;
+    float scale = layer->params.attention.scale;
+
+    const float *input_f32 = (const float *)input;
+    float *output_f32 = (float *)output;
+    const float *in_w_T = (const float *)layer->params.attention.in_proj_weight_rvv;
+    const float *in_b = (const float *)layer->params.attention.in_proj_bias;
+    const float *out_w_T = (const float *)layer->params.attention.out_proj_weight_rvv;
+    const float *out_b = (const float *)layer->params.attention.out_proj_bias;
+    float *qkv = (float *)layer->params.attention.qkv_buffer;
+    float *ctx = (float *)layer->params.attention.ctx_buffer;
+    float *proj = (float *)layer->params.attention.proj_buffer;
+    float *scores = (float *)layer->params.attention.score_buffer;
+
+    linear_rows_fp32_rvv(input_f32, seq_len, embed_dim, qkv_dim, in_w_T, in_b, qkv);
+    memset(ctx, 0, (size_t)seq_len * embed_dim * sizeof(float));
+
+    for (int t = 0; t < seq_len; ++t) {
+        const float *q_row = &qkv[t * qkv_dim];
+        for (int h = 0; h < num_heads; ++h) {
+            const float *q = &q_row[h * head_dim];
+            for (int s = 0; s < seq_len; ++s) {
+                const float *src = &qkv[s * qkv_dim];
+                const float *k = &src[embed_dim + h * head_dim];
+                float dot = 0.0f;
+                for (int d = 0; d < head_dim; ) {
+                    size_t vl = __riscv_vsetvl_e32m8(head_dim - d);
+                    vfloat32m8_t vq = __riscv_vle32_v_f32m8(&q[d], vl);
+                    vfloat32m8_t vk = __riscv_vle32_v_f32m8(&k[d], vl);
+                    vfloat32m8_t vmul = __riscv_vfmul_vv_f32m8(vq, vk, vl);
+                    vfloat32m1_t init = __riscv_vfmv_s_f_f32m1(0.0f, 1);
+                    vfloat32m1_t red = __riscv_vfredusum_vs_f32m8_f32m1(vmul, init, vl);
+                    dot += __riscv_vfmv_f_s_f32m1_f32(red);
+                    d += (int)vl;
+                }
+                scores[s] = dot * scale;
+            }
+            softmax_f32(scores, scores, seq_len);
+
+            float *ctx_head = &ctx[t * embed_dim + h * head_dim];
+            for (int s = 0; s < seq_len; ++s) {
+                float coeff = scores[s];
+                const float *src = &qkv[s * qkv_dim];
+                const float *v = &src[(2 * embed_dim) + h * head_dim];
+                for (int d = 0; d < head_dim; ) {
+                    size_t vl = __riscv_vsetvl_e32m8(head_dim - d);
+                    vfloat32m8_t vacc = __riscv_vle32_v_f32m8(&ctx_head[d], vl);
+                    vfloat32m8_t vv = __riscv_vle32_v_f32m8(&v[d], vl);
+                    vacc = __riscv_vfmacc_vf_f32m8(vacc, coeff, vv, vl);
+                    __riscv_vse32_v_f32m8(&ctx_head[d], vacc, vl);
+                    d += (int)vl;
+                }
+            }
+        }
+    }
+
+    linear_rows_fp32_rvv(ctx, seq_len, embed_dim, embed_dim, out_w_T, out_b, proj);
+    memcpy(output_f32, proj, (size_t)seq_len * embed_dim * sizeof(float));
+}
+
 void AdaptiveMaxPool1d_wc_int8_vpu(NNModule *layer, void *input, void *output)
 {
     const int8_t *input_i8 = (const int8_t *)input;

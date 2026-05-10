@@ -15,6 +15,8 @@ const char *layer_type_name(LayerType type) {
     case TRANSPOSE: return "Transpose";
     case RES_SAVE: return "RES_Save";
     case RES_ADD: return "RES_Add";
+    case LAYERNORM1D: return "LayerNorm1D";
+    case ATTENTION1D: return "Attention1D";
     default:     return "Unknown";
     }
 }

@@ -6,7 +6,7 @@
 
 // Requantize + activation kernels for post-processing int32 accumulators into int8 outputs.
 
-enum { ACTIVATION_KERNEL_COUNT = 6 };
+enum { ACTIVATION_KERNEL_COUNT = 7 };
 
 static inline vint8m2_t requantize_vacc_i8_asym_per_channel(vint32m8_t vacc,
                                                             const float *scale,
@@ -90,6 +90,15 @@ static void requantize_store_chunk_i8_asym_per_channel_leaky_relu(vint32m8_t vac
     requantize_store_chunk_i8_asym_per_channel_scalar_with_act(vacc, scale, zp, dst, vl, LEAKY_RELU);
 }
 
+static void requantize_store_chunk_i8_asym_per_channel_gelu(vint32m8_t vacc,
+                                                            const float *scale,
+                                                            const int32_t *zp,
+                                                            int8_t *dst,
+                                                            size_t vl)
+{
+    requantize_store_chunk_i8_asym_per_channel_scalar_with_act(vacc, scale, zp, dst, vl, GELU);
+}
+
 static void requantize_store_chunk_i8_asym_per_channel_unsupported_softmax(vint32m8_t vacc,
                                                                            const float *scale,
                                                                            const int32_t *zp,
@@ -127,6 +136,7 @@ static const requantize_store_chunk_i8_asym_per_channel_kernel_t
     [TANH] = requantize_store_chunk_i8_asym_per_channel_tanh,
     [LEAKY_RELU] = requantize_store_chunk_i8_asym_per_channel_leaky_relu,
     [SOFTMAX] = requantize_store_chunk_i8_asym_per_channel_unsupported_softmax,
+    [GELU] = requantize_store_chunk_i8_asym_per_channel_gelu,
     [NONE] = requantize_store_chunk_i8_asym_per_channel_none,
 };
 

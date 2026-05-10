@@ -10,8 +10,8 @@ Define 1D CNN layer parameters and structures
 include layer types, activation functions, and layer definitions
 
 */
-typedef enum { RELU, SIGMOID, TANH, LEAKY_RELU, SOFTMAX, NONE } ActivationType;
-typedef enum { CONV1D, CONV2D, POOL1D, POOL2D, FC, TRANSPOSE, RES_SAVE, RES_ADD } LayerType;
+typedef enum { RELU, SIGMOID, TANH, LEAKY_RELU, SOFTMAX, GELU, NONE } ActivationType;
+typedef enum { CONV1D, CONV2D, POOL1D, POOL2D, FC, TRANSPOSE, RES_SAVE, RES_ADD, LAYERNORM1D, ATTENTION1D } LayerType;
 typedef enum { MAX_POOL, AVG_POOL, AdaptiveMaxPool1d, AdaptiveAvgPool2d } PoolType;
 typedef enum { TRANSPOSE_CW_TO_WC, TRANSPOSE_WC_TO_CW } TransposeType;
 /* Adjust element types in layer */
@@ -64,6 +64,28 @@ typedef struct {
 } FCParams;
 
 typedef struct {
+    void *weight;
+    void *bias;
+    float eps;
+} LayerNormParams;
+
+typedef struct {
+    void *in_proj_weight;
+    void *in_proj_weight_rvv;
+    void *in_proj_bias;
+    void *out_proj_weight;
+    void *out_proj_weight_rvv;
+    void *out_proj_bias;
+    int num_heads;
+    int head_dim;
+    float scale;
+    void *qkv_buffer;
+    void *ctx_buffer;
+    void *proj_buffer;
+    void *score_buffer;
+} AttentionParams;
+
+typedef struct {
     TransposeType mode;
 } TransposeParams;
 
@@ -96,6 +118,8 @@ typedef struct NNModule {
         PoolParams pool;
         Pool2DParams pool2d;
         FCParams fc;
+        LayerNormParams layernorm;
+        AttentionParams attention;
         TransposeParams transpose;
         // residual branch
         SaveParams save;

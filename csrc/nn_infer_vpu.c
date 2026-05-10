@@ -78,6 +78,12 @@ void forward_int8_vpu(CNN *net, void *input)
         case FC:
             fullyconnected_int8_vpu(currentLayer, src, dst);
             break;
+        case LAYERNORM1D:
+            printf("LayerNorm1D int8 path is unsupported\n");
+            exit(EXIT_FAILURE);
+        case ATTENTION1D:
+            printf("Attention1D int8 path is unsupported\n");
+            exit(EXIT_FAILURE);
         case RES_SAVE:
             save_vpu(currentLayer, src, dst);
             break;
@@ -145,6 +151,12 @@ void forward_fp32_vpu(CNN *net, void *input)
             break;
         case FC:
             fullyconnected_fp32_vpu(currentLayer, src, dst);
+            break;
+        case LAYERNORM1D:
+            layernorm1d_fp32_vpu(currentLayer, src, dst);
+            break;
+        case ATTENTION1D:
+            attention1d_fp32_vpu(currentLayer, src, dst);
             break;
         case RES_SAVE:
             save_vpu(currentLayer, src, dst);

@@ -5,6 +5,11 @@
 #define malloc(size)   DO_NOT_USE_MALLOC_USE_SAFE_MALLOC
 #define calloc(n, s)   DO_NOT_USE_CALLOC_USE_SAFE_CALLOC
 
+static inline float gelu_scalar_f32(float x)
+{
+    return 0.5f * x * (1.0f + erff(x * 0.70710678118654752f));
+}
+
 #define DEFINE_ACTIVATE(TYPE, SUFFIX) \
 TYPE activate_##SUFFIX(TYPE x, ActivationType type) { \
     switch (type) { \
@@ -17,6 +22,10 @@ TYPE activate_##SUFFIX(TYPE x, ActivationType type) { \
         case TANH: { \
             float fx = (float)x; \
             return (TYPE)tanhf(fx); \
+        } \
+        case GELU: { \
+            float fx = (float)x; \
+            return (TYPE)gelu_scalar_f32(fx); \
         } \
         case NONE: default: return x; \
     } \

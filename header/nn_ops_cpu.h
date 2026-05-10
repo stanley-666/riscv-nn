@@ -8,6 +8,8 @@ void conv2d_cpu(NNModule *layer, void *input, void *output);
 void pool1d_cpu(NNModule *layer, void *input, void *output);
 void pool2d_cpu(NNModule *layer, void *input, void *output);
 void fullyconnected_cpu(NNModule *layer, void *input, void *output);
+void layernorm1d_cpu(NNModule *layer, void *input, void *output);
+void attention1d_cpu(NNModule *layer, void *input, void *output);
 void AdaptiveMaxPool1d_cpu(NNModule *layer, void *input, void *output);
 void AdaptiveAvgPool2d_cpu(NNModule *layer, void *input, void *output);
 void transpose_cpu(NNModule *layer, void *input, void *output);

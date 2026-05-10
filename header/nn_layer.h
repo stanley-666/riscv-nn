@@ -24,6 +24,15 @@ NNModule *nn_Pool2d(int inputChannels, int inputHeight, int inputWidth, int pool
 NNModule *nn_AdaptiveAvgPool2d(int inputChannels, int inputHeight, int inputWidth, int outputHeight, int outputWidth, elem_type dtype);
 NNModule *nn_Linear(int inputSize, int outputSize, ActivationType activation, const void *weights, const void *bias, const void *M, const void *zps, elem_type dtype);
 NNModule *nn_AdaptiveMaxPool1d(int inputChannels, int inputLength, int outputsize, elem_type dtype);
+NNModule *nn_LayerNorm1d(int inputWidth, int inputChannels, const void *weight, const void *bias, float eps, elem_type dtype);
+NNModule *nn_MultiHeadAttention1d(int inputWidth,
+                                  int embedDim,
+                                  int numHeads,
+                                  const void *inProjWeight,
+                                  const void *inProjBias,
+                                  const void *outProjWeight,
+                                  const void *outProjBias,
+                                  elem_type dtype);
 NNModule *nn_Transpose(int width, int channels, TransposeType mode, elem_type dtype);
 NNModule *nn_Save(int inputChannels, int inputHeight, int inputWidth, elem_type dtype);
 NNModule *nn_Add(int inputChannels, int inputHeight, int inputWidth, ActivationType activation, void *skip, elem_type dtype);

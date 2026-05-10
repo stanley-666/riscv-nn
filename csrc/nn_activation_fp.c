@@ -1,7 +1,7 @@
 #include "nn_activation_fp.h"
 #include "nn_utils.h"
 
-enum { ACTIVATION_KERNEL_COUNT_F32 = 6 };
+enum { ACTIVATION_KERNEL_COUNT_F32 = 7 };
 
 static void activate_store_chunk_none_f32(vfloat32m8_t vacc, float *output, size_t vl)
 {
@@ -46,6 +46,15 @@ static void activate_store_chunk_softmax_f32(vfloat32m8_t vacc, float *output, s
     __riscv_vse32_v_f32m8(output, vacc, vl);
 }
 
+static void activate_store_chunk_gelu_f32(vfloat32m8_t vacc, float *output, size_t vl)
+{
+    float tmp[vl];
+    __riscv_vse32_v_f32m8(tmp, vacc, vl);
+    for (size_t i = 0; i < vl; ++i) {
+        output[i] = activate_f32(tmp[i], GELU);
+    }
+}
+
 static void activate_store_chunk_unknown_f32(vfloat32m8_t vacc, float *output, size_t vl)
 {
     __riscv_vse32_v_f32m8(output, vacc, vl);
@@ -58,6 +67,7 @@ static const activate_store_chunk_kernel_f32_t kActivateStoreChunkKernelsF32[ACT
     [TANH] = activate_store_chunk_tanh_f32,
     [LEAKY_RELU] = activate_store_chunk_leaky_relu_f32,
     [SOFTMAX] = activate_store_chunk_softmax_f32,
+    [GELU] = activate_store_chunk_gelu_f32,
     [NONE] = activate_store_chunk_none_f32,
 };
 

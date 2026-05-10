@@ -59,6 +59,12 @@ void forward(CNN *net, void *input)
             elapsed_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
             printf("FC Layer Inference time: %.6f seconds\n", elapsed_time);
             break;
+        case LAYERNORM1D:
+            layernorm1d_cpu(currentLayer, src, dst);
+            break;
+        case ATTENTION1D:
+            attention1d_cpu(currentLayer, src, dst);
+            break;
         case RES_SAVE:
             save_cpu(currentLayer, src, dst);
             break;

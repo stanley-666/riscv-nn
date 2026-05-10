@@ -39,6 +39,8 @@ void AdaptiveAvgPool2d_fp32_vpu(NNModule *layer, void *input, void *output);
 
 void fullyconnected_int8_vpu(NNModule *layer, void *input, void *output);
 void fullyconnected_fp32_vpu(NNModule *layer, void *input, void *output);
+void layernorm1d_fp32_vpu(NNModule *layer, void *input, void *output);
+void attention1d_fp32_vpu(NNModule *layer, void *input, void *output);
 void transpose_vpu(NNModule *layer, void *input, void *output);
 void save_vpu(NNModule *layer, void *input, void *output);
 void add_vpu(NNModule *layer, void *input, void *output);

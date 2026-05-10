@@ -1,6 +1,24 @@
 #include "nn_layer.h"
 #include "nn_utils.h"
 
+static int16_t *pack_linear_weights_i8(const int8_t *wt_src, int inDim, int outDim)
+{
+    int16_t *wt_rvv = (int16_t *)safe_malloc(inDim * outDim * sizeof(int16_t));
+    for (int o = 0; o < outDim; ++o)
+        for (int i = 0; i < inDim; ++i)
+            wt_rvv[i * outDim + o] = wt_src[o * inDim + i];
+    return wt_rvv;
+}
+
+static float *pack_linear_weights_f32(const float *wt_src, int inDim, int outDim)
+{
+    float *wt_rvv = (float *)safe_malloc(inDim * outDim * sizeof(float));
+    for (int o = 0; o < outDim; ++o)
+        for (int i = 0; i < inDim; ++i)
+            wt_rvv[i * outDim + o] = wt_src[o * inDim + i];
+    return wt_rvv;
+}
+
 void addLayer(CNN *net, NNModule *layer) {
     printf("Adding layer %s (type=%d) to CNN\n", layer_type_name(layer->type), layer->type);
     layer->prev = net->lastModule;
@@ -276,20 +294,14 @@ NNModule *nn_Linear(int inputSize, int outputSize, ActivationType activation, co
         int inDim = inputSize;
         int outDim = outputSize;
         const int8_t *wt_src = (const int8_t *)weights;
-        int16_t *wt_rvv = (int16_t *)safe_malloc(inDim * outDim * sizeof(int16_t));
-        for (int o = 0; o < outDim; ++o)
-            for (int i = 0; i < inDim; ++i)
-                wt_rvv[i * outDim + o] = wt_src[o * inDim + i];
+        int16_t *wt_rvv = pack_linear_weights_i8(wt_src, inDim, outDim);
         layer->params.fc.weights_rvv = wt_rvv;
         layer->params.fc.acc_buffer = safe_malloc(outDim * sizeof(int32_t));
     } else if (dtype == ELEM_FLOAT32) {
         int inDim = inputSize;
         int outDim = outputSize;
         const float *wt_src = (const float *)weights;
-        float *wt_rvv = (float *)safe_malloc(inDim * outDim * sizeof(float));
-        for (int o = 0; o < outDim; ++o)
-            for (int i = 0; i < inDim; ++i)
-                wt_rvv[i * outDim + o] = wt_src[o * inDim + i];
+        float *wt_rvv = pack_linear_weights_f32(wt_src, inDim, outDim);
         layer->params.fc.weights_rvv = wt_rvv;
         // float 路徑直接寫入 output，不強制配置 acc_buffer
     }
@@ -301,6 +313,91 @@ NNModule *nn_Linear(int inputSize, int outputSize, ActivationType activation, co
     printf(" Input : %d, Output: %d\n", layer->inputShape.W, layer->outputShape.W);
     printf("======================\n");
 
+    return layer;
+}
+
+NNModule *nn_LayerNorm1d(int inputWidth, int inputChannels, const void *weight, const void *bias, float eps, elem_type dtype)
+{
+    NNModule *layer = (NNModule *)safe_malloc(sizeof(NNModule));
+    layer->type = LAYERNORM1D;
+    layer->activation = NONE;
+    layer->inputShape.N = 1;
+    layer->inputShape.C = inputChannels;
+    layer->inputShape.H = 1;
+    layer->inputShape.W = inputWidth;
+    layer->outputShape = layer->inputShape;
+    layer->params.layernorm.weight = (void *)weight;
+    layer->params.layernorm.bias = (void *)bias;
+    layer->params.layernorm.eps = eps;
+    layer->dtype = dtype;
+    layer->prev = NULL;
+    layer->next = NULL;
+
+    printf("=== Added LayerNorm1D NNModule ===\n");
+    printf(" Input/Output : Width=%d, Channels=%d, eps=%g\n", inputWidth, inputChannels, (double)eps);
+    printf("=============================\n");
+    return layer;
+}
+
+NNModule *nn_MultiHeadAttention1d(int inputWidth,
+                                  int embedDim,
+                                  int numHeads,
+                                  const void *inProjWeight,
+                                  const void *inProjBias,
+                                  const void *outProjWeight,
+                                  const void *outProjBias,
+                                  elem_type dtype)
+{
+    if (dtype != ELEM_FLOAT32 && dtype != ELEM_INT8) {
+        printf("Error: unsupported dtype for attention layer\n");
+        exit(EXIT_FAILURE);
+    }
+    if (embedDim <= 0 || numHeads <= 0 || (embedDim % numHeads) != 0) {
+        printf("Error: invalid attention dimensions embedDim=%d numHeads=%d\n", embedDim, numHeads);
+        exit(EXIT_FAILURE);
+    }
+
+    NNModule *layer = (NNModule *)safe_malloc(sizeof(NNModule));
+    layer->type = ATTENTION1D;
+    layer->activation = NONE;
+    layer->inputShape.N = 1;
+    layer->inputShape.C = embedDim;
+    layer->inputShape.H = 1;
+    layer->inputShape.W = inputWidth;
+    layer->outputShape = layer->inputShape;
+    layer->dtype = dtype;
+
+    int qkvDim = embedDim * 3;
+    layer->params.attention.in_proj_weight = (void *)inProjWeight;
+    layer->params.attention.in_proj_bias = (void *)inProjBias;
+    layer->params.attention.out_proj_weight = (void *)outProjWeight;
+    layer->params.attention.out_proj_bias = (void *)outProjBias;
+    layer->params.attention.num_heads = numHeads;
+    layer->params.attention.head_dim = embedDim / numHeads;
+    layer->params.attention.scale = 1.0f / sqrtf((float)(embedDim / numHeads));
+
+    if (dtype == ELEM_FLOAT32) {
+        layer->params.attention.in_proj_weight_rvv = pack_linear_weights_f32((const float *)inProjWeight, embedDim, qkvDim);
+        layer->params.attention.out_proj_weight_rvv = pack_linear_weights_f32((const float *)outProjWeight, embedDim, embedDim);
+        layer->params.attention.qkv_buffer = safe_malloc((size_t)inputWidth * qkvDim * sizeof(float));
+        layer->params.attention.ctx_buffer = safe_malloc((size_t)inputWidth * embedDim * sizeof(float));
+        layer->params.attention.proj_buffer = safe_malloc((size_t)inputWidth * embedDim * sizeof(float));
+        layer->params.attention.score_buffer = safe_malloc((size_t)inputWidth * sizeof(float));
+    } else {
+        layer->params.attention.in_proj_weight_rvv = pack_linear_weights_i8((const int8_t *)inProjWeight, embedDim, qkvDim);
+        layer->params.attention.out_proj_weight_rvv = pack_linear_weights_i8((const int8_t *)outProjWeight, embedDim, embedDim);
+        layer->params.attention.qkv_buffer = safe_malloc((size_t)inputWidth * qkvDim * sizeof(int8_t));
+        layer->params.attention.ctx_buffer = safe_malloc((size_t)inputWidth * embedDim * sizeof(int8_t));
+        layer->params.attention.proj_buffer = safe_malloc((size_t)inputWidth * embedDim * sizeof(int8_t));
+        layer->params.attention.score_buffer = safe_malloc((size_t)inputWidth * sizeof(float));
+    }
+
+    layer->prev = NULL;
+    layer->next = NULL;
+
+    printf("=== Added Attention1D NNModule ===\n");
+    printf(" Input/Output : Width=%d, Embed=%d, Heads=%d\n", inputWidth, embedDim, numHeads);
+    printf("============================\n");
     return layer;
 }
 
@@ -505,8 +602,32 @@ void freeCNN(CNN *net)
     while (currentLayer != NULL)
     {
         NNModule *nextLayer = currentLayer->next;
+        switch (currentLayer->type) {
+        case CONV1D:
+            safe_free(currentLayer->params.conv.weights_rvv);
+            safe_free(currentLayer->params.conv.acc_buffer);
+            break;
+        case CONV2D:
+            safe_free(currentLayer->params.conv2d.weights_rvv);
+            safe_free(currentLayer->params.conv2d.acc_buffer);
+            break;
+        case FC:
+            safe_free(currentLayer->params.fc.weights_rvv);
+            safe_free(currentLayer->params.fc.acc_buffer);
+            break;
+        case ATTENTION1D:
+            safe_free(currentLayer->params.attention.in_proj_weight_rvv);
+            safe_free(currentLayer->params.attention.out_proj_weight_rvv);
+            safe_free(currentLayer->params.attention.qkv_buffer);
+            safe_free(currentLayer->params.attention.ctx_buffer);
+            safe_free(currentLayer->params.attention.proj_buffer);
+            safe_free(currentLayer->params.attention.score_buffer);
+            break;
+        default:
+            break;
+        }
         safe_free(currentLayer);
-    currentLayer = nextLayer;
+	    currentLayer = nextLayer;
     }
 
     safe_free(net);
@@ -554,6 +675,20 @@ void printCNN(CNN *net)
         case FC:
             printf("Fully Connected NNModule\n");
             break;
+        case LAYERNORM1D:
+            printf("LayerNorm1D NNModule\n");
+            printf("  width: %d, channels: %d, eps=%g\n",
+                   currentLayer->inputShape.W,
+                   currentLayer->inputShape.C,
+                   (double)currentLayer->params.layernorm.eps);
+            break;
+        case ATTENTION1D:
+            printf("Attention1D NNModule\n");
+            printf("  width: %d, embedDim: %d, heads: %d\n",
+                   currentLayer->inputShape.W,
+                   currentLayer->inputShape.C,
+                   currentLayer->params.attention.num_heads);
+            break;
         case TRANSPOSE:
             printf("Transpose NNModule\n");
             break;
@@ -582,6 +717,9 @@ void printCNN(CNN *net)
             break;
         case SOFTMAX:
             printf("Softmax\n");
+            break;
+        case GELU:
+            printf("GELU\n");
             break;
         case NONE:
             printf("None\n");
