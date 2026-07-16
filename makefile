@@ -3,8 +3,6 @@ CROSS_COMPILE ?= riscv64-unknown-linux-gnu-
 CC      := $(CROSS_COMPILE)gcc
 OBJDUMP := $(CROSS_COMPILE)objdump
 OBJCOPY := $(CROSS_COMPILE)objcopy
-MAKEFLAGS += -j8
-
 TB_INC  := $(shell find testbench -type d)
 INCLUDE := -I./header -I./csrc $(addprefix -I,$(TB_INC))
 
@@ -14,10 +12,13 @@ INCLUDE := -I./header -I./csrc $(addprefix -I,$(TB_INC))
 # Default profile
 CONFIG ?= zvl512b_cycle
 # Source & Target
-CORE_SRC := $(filter-out csrc/main.c,$(wildcard csrc/*.c))
+NN_COMMON_SRC_DIR := csrc
+include make/common.mk
+CORE_SRC := $(NN_COMMON_SRCS) csrc/nn_runtime_linux.c
 TB_SRCS  := $(shell find testbench -name '*.c')
 TB_BINS  := $(notdir $(TB_SRCS:.c=))
-OBJ_DIR  := build
+LINUX_BUILD_DIR := build/linux-pk
+OBJ_DIR  := $(LINUX_BUILD_DIR)/$(CONFIG)/$(BACKEND)/obj
 CORE_OBJS := $(patsubst csrc/%.c,$(OBJ_DIR)/csrc/%.o,$(CORE_SRC))
 
 # Architecture and ABI settings
@@ -77,11 +78,18 @@ endif
 
 # RISC-V gnu Compiler flags
 CFLAGS  := -O3 -march=$(ARCH) -mabi=$(ABI) -Wall -Wextra -std=c11 $(INCLUDE)
+CFLAGS  += $(NN_BACKEND_CPPFLAGS)
+# RVV is emitted only by explicit intrinsics unless a caller opts in to GCC
+# auto-vectorization. This keeps scalar/reference kernels valid as baselines.
+AUTO_VECTORIZE ?= 0
+ifeq ($(AUTO_VECTORIZE),0)
+  CFLAGS += -fno-tree-vectorize -fno-tree-slp-vectorize -fno-builtin
+endif
 # Linker flags for Linux dynamic and pk/static builds
 DYNAMIC_LDFLAGS :=
 STATIC_LDFLAGS  := -static
 # Keep the legacy target behavior configurable.
-LINK_MODE ?= dynamic
+LINK_MODE ?= static
 ifeq ($(LINK_MODE),static)
   LDFLAGS := $(STATIC_LDFLAGS)
 else
@@ -97,14 +105,44 @@ endif
 
 all: $(TB_BINS)
 
-define TB_template
-$(notdir $(1:.c=)): $(patsubst testbench/%.c,$(OBJ_DIR)/testbench/%.o,$(1)) $(CORE_OBJS)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $$@ $$^ ${LIBS}
+TESTBENCH ?= sentence_inference_fp32
+LINUX_TESTBENCHES := gesture_recognition_fp32 kyber_nouv_rvv resnet50 \
+                    sentence_inference_fp32 sentence_inference_fp32_time \
+                    sentence_inference_int8
 
-$(notdir $(1:.c=))_dynamic: $(patsubst testbench/%.c,$(OBJ_DIR)/testbench/%.o,$(1)) $(CORE_OBJS)
+linux:
+	@if ! echo " $(LINUX_TESTBENCHES) " | grep -q " $(TESTBENCH) "; then \
+		echo "Unsupported Linux/pk TESTBENCH='$(TESTBENCH)'"; \
+		echo "Supported: $(LINUX_TESTBENCHES)"; \
+		exit 2; \
+	fi
+	$(MAKE) $(TESTBENCH) CONFIG=$(CONFIG) LINK_MODE=$(LINK_MODE) BACKEND=$(BACKEND)
+
+baremetal:
+	$(MAKE) -C baremetal vector
+
+baremetal-elf:
+	$(MAKE) -C baremetal elf
+
+baremetal-dump:
+	$(MAKE) -C baremetal dump
+
+baremetal-flash:
+	$(MAKE) -C baremetal flash
+
+define TB_template
+$(notdir $(1:.c=)): $(LINUX_BUILD_DIR)/$(notdir $(1:.c=))/$(CONFIG)/$(BACKEND)/$(LINK_MODE)/$(notdir $(1:.c=))
+
+$(notdir $(1:.c=))_dynamic: $(LINUX_BUILD_DIR)/$(notdir $(1:.c=))/$(CONFIG)/$(BACKEND)/dynamic/$(notdir $(1:.c=))
+
+$(LINUX_BUILD_DIR)/$(notdir $(1:.c=))/$(CONFIG)/$(BACKEND)/dynamic/$(notdir $(1:.c=)): $(patsubst testbench/%.c,$(OBJ_DIR)/testbench/%.o,$(1)) $(CORE_OBJS)
+	@mkdir -p $$(@D)
 	$(CC) $(CFLAGS) $(DYNAMIC_LDFLAGS) -o $$@ $$^ ${LIBS}
 
-$(notdir $(1:.c=))_static: $(patsubst testbench/%.c,$(OBJ_DIR)/testbench/%.o,$(1)) $(CORE_OBJS)
+$(notdir $(1:.c=))_static: $(LINUX_BUILD_DIR)/$(notdir $(1:.c=))/$(CONFIG)/$(BACKEND)/static/$(notdir $(1:.c=))
+
+$(LINUX_BUILD_DIR)/$(notdir $(1:.c=))/$(CONFIG)/$(BACKEND)/static/$(notdir $(1:.c=)): $(patsubst testbench/%.c,$(OBJ_DIR)/testbench/%.o,$(1)) $(CORE_OBJS)
+	@mkdir -p $$(@D)
 	$(CC) $(CFLAGS) $(STATIC_LDFLAGS) -o $$@ $$^ ${LIBS}
 endef
 $(foreach src,$(TB_SRCS),$(eval $(call TB_template,$(src))))
@@ -113,9 +151,11 @@ $(OBJ_DIR)/%.o: %.c
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-dump: $(addsuffix .dump,$(TB_BINS))
+LINUX_OUTPUTS := $(foreach name,$(TB_BINS),$(LINUX_BUILD_DIR)/$(name)/$(CONFIG)/$(BACKEND)/$(LINK_MODE)/$(name))
 
-bin: $(addsuffix .bin,$(TB_BINS))
+dump: $(addsuffix .dump,$(LINUX_OUTPUTS))
+
+bin: $(addsuffix .bin,$(LINUX_OUTPUTS))
 
 %.dump: %
 	$(OBJDUMP) -d $< > $@
@@ -125,6 +165,6 @@ bin: $(addsuffix .bin,$(TB_BINS))
 
 clean:
 	rm -f $(TB_BINS) $(addsuffix .dump,$(TB_BINS)) $(addsuffix .bin,$(TB_BINS))
-	rm -rf $(OBJ_DIR)
+	rm -rf build
 
-.PHONY: all clean dump bin
+.PHONY: all clean dump bin linux baremetal baremetal-elf baremetal-dump baremetal-flash

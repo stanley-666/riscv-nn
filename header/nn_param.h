@@ -2,7 +2,7 @@
 
 #define _NN_PARAM_H_
 #include <stdint.h>
-#include <stddef.h>   // 這一行讓 NULL 可以使用
+#include <stddef.h>   // Provides size_t and NULL.
 
 /* 1D CNN parameters and structures
 
@@ -19,27 +19,27 @@ typedef enum { ELEM_INT8, ELEM_INT16, ELEM_FLOAT16, ELEM_FLOAT32} elem_type;
 /* 1D CNN layer parameters */
 typedef struct { // CONV1D layer parameters
     void *weights;
-    void *weights_rvv; // im2col (pack)
+    void *weights_rvv; // Weights packed for the RVV im2col kernel.
     void *bias;
-    void *M;           // float* 每通道 scale_in * scale_w / scale_out
-    void *zps;        // int32_t* 每通道 zero point
+    void *M;           // float*: per-channel scale_in * scale_w / scale_out.
+    void *zps;         // int32_t*: per-channel output zero point.
     int sizeofWeights;
     int sizeofBias;
     int filterSize, stride, padding, numFilters;
-    void *acc_buffer; // 用於儲存中間累加結果
+    void *acc_buffer;  // Stores intermediate accumulation results.
 } ConvParams;
 
 typedef struct { // CONV2D layer parameters
     void *weights;
-    void *weights_rvv; // im2col (pack)
+    void *weights_rvv; // Weights packed for the RVV im2col kernel.
     void *bias;
-    void *M;           // float* 每通道 scale_in * scale_w / scale_out
-    void *zps;        // int32_t* 每通道 zero point
-    void *input_override; // optional input pointer for residual branches
+    void *M;           // float*: per-channel scale_in * scale_w / scale_out.
+    void *zps;         // int32_t*: per-channel output zero point.
+    void *input_override; // Optional input pointer for residual branches.
     int sizeofWeights;
     int sizeofBias;
     int filterSize, stride, padding, numFilters;
-    void *acc_buffer; // 用於儲存中間累加結果
+    void *acc_buffer;  // Stores intermediate accumulation results.
 } Conv2DParams;
  
 typedef struct {
@@ -54,13 +54,13 @@ typedef struct {
 
 typedef struct {
     void *weights;
-    void *weights_rvv; // transposed weights for RVV
+    void *weights_rvv; // Weights transposed for RVV access.
     void *bias;
-    void *M;           // float* 每通道 scale_in * scale_w / scale_out
-    void *zps;        // int32_t* 每通道 zero point
+    void *M;           // float*: per-channel scale_in * scale_w / scale_out.
+    void *zps;         // int32_t*: per-channel output zero point.
     int sizeofWeights;
     int sizeofBias;
-    void *acc_buffer; // 避免推論期重複分配的累加暫存
+    void *acc_buffer;  // Reusable accumulator buffer allocated before inference.
 } FCParams;
 
 typedef struct {
@@ -121,7 +121,7 @@ typedef struct NNModule {
         LayerNormParams layernorm;
         AttentionParams attention;
         TransposeParams transpose;
-        // residual branch
+        // Residual-branch parameters.
         SaveParams save;
         AddParams add;
     } params;
@@ -141,9 +141,10 @@ const char *layer_type_name(LayerType type);
 extern void *buffer1;
 extern void *buffer2;
 extern size_t forward_input_bytes;
-#endif // _1DCNN_PARAM_H_
+#endif // _NN_PARAM_H_
 
 /*
-Copyright (c) 2025, MC2 Lab, National Taiwan Normal University. All rights reserved.
+Copyright (c) 2025, MC2 Lab, National Taiwan Normal University.
+SPDX-License-Identifier: Apache-2.0
 Author : Stanley Lee
 */

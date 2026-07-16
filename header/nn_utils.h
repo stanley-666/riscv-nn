@@ -7,11 +7,9 @@
 #include <math.h>
 #include <float.h> 
 #include "nn_param.h"
+#include "nn_runtime.h"
 
 size_t sizeof_dtype(elem_type t);
-void *safe_malloc(size_t size); // if malloc fail, exit program
-void *safe_calloc(size_t num, size_t size) ; // if calloc fail, exit program
-void safe_free(void *ptr);
 /* Convolution 1D  RVV */
 
 float   activate_f32(float x, ActivationType type);
@@ -36,6 +34,7 @@ void free_pingpong_buffer();
 #endif // _1DCNN_UTILS_H_
 
 /*
-Copyright (c) 2025, MC2 Lab, National Taiwan Normal University.All rights reserved.
+Copyright (c) 2025, MC2 Lab, National Taiwan Normal University.
+SPDX-License-Identifier: Apache-2.0
 Author : Stanley Lee
 */

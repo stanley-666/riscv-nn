@@ -1,14 +1,25 @@
+/*
+ * Copyright (c) 2025, MC2 Lab, National Taiwan Normal University.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 #include <float.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "nn_layer.h"
-#include "nn_ops_vpu.h"
+#include "backends/riscv/vector/ops/conv1d/nn_ops_vpu_conv1d_fp32_internal.h"
+#include "backends/riscv/vector/ops/fully_connected/nn_ops_vpu_fc_internal.h"
+#include "backends/riscv/vector/ops/pooling/nn_ops_vpu_pool1d_internal.h"
+#include "backends/riscv/vector/ops/tensor/nn_ops_vpu_tensor_internal.h"
+#include "backends/riscv/vector/ops/transformer/nn_ops_vpu_transformer_internal.h"
+#include "backends/riscv/vector/ops/normalization/nn_ops_vpu_normalization_internal.h"
 #include "nn_utils.h"
 
 #include "kyber_nouv_sample.h"
 #include "kyber_nouv_weights.h"
+#include "kyber_nouv_runner.h"
 
 #define KYBER_MAX_ACT_ELEMS (KYBER_NOUV_STAGE3_LEN * KYBER_NOUV_EMBED_DIM)
 #define KYBER_ATTN_SKIP_ELEMS (KYBER_NOUV_TRACE_SEQ_LEN * KYBER_NOUV_EMBED_DIM)
@@ -63,7 +74,7 @@ static void print_top5(const float *values, int len)
     }
 }
 
-int main(void)
+void kyber_nouv_run(void)
 {
     CNN *model = createCNN();
 
@@ -112,11 +123,11 @@ int main(void)
 
     uint64_t start_cycle = read_rdcycle();
     transpose_vpu(transpose, (void *)KYBER_NOUV_SAMPLE_TRACE_X, act_a);
-    conv1d_fp32_vpu(conv1, act_a, act_b);
-    conv1d_fp32_vpu(conv2, act_b, act_a);
-    conv1d_fp32_vpu(conv3, act_a, act_b);
-    conv1d_fp32_vpu(conv4, act_b, act_a);
-    conv1d_fp32_vpu(conv5, act_a, act_b);
+    conv1d_fp32_vpu_im2col_unroll8_acc2_m8(conv1, act_a, act_b);
+    conv1d_fp32_vpu_im2col_unroll8_acc2_m8(conv2, act_b, act_a);
+    conv1d_fp32_vpu_im2col_unroll8_acc2_m8(conv3, act_a, act_b);
+    conv1d_fp32_vpu_im2col_unroll8_acc2_m8(conv4, act_b, act_a);
+    conv1d_fp32_vpu_im2col_unroll8_acc2_m8(conv5, act_a, act_b);
     save_vpu(save, act_b, act_a);
     attention1d_fp32_vpu(attn, act_b, act_a);
     add_vpu(add, act_a, act_b);
@@ -150,5 +161,12 @@ int main(void)
     print_top5(logits, KYBER_NOUV_NUM_CLASSES);
 
     freeCNN(model);
+}
+
+#ifndef BAREMETAL
+int main(void)
+{
+    kyber_nouv_run();
     return 0;
 }
+#endif

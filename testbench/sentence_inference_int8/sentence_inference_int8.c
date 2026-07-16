@@ -6,9 +6,15 @@
 
 #include "nn_layer.h"
 #include "nn_utils.h"
+#if NN_BACKEND_CPU
 #include "nn_infer_cpu.h"
+#endif
+#if NN_BACKEND_VECTOR
 #include "nn_infer_vpu.h"
-#include "nn_ops_vpu.h"
+#include "backends/riscv/vector/ops/conv1d/nn_ops_vpu_conv1d_i8_internal.h"
+#include "backends/riscv/vector/ops/fully_connected/nn_ops_vpu_fc_internal.h"
+#include "backends/riscv/vector/ops/pooling/nn_ops_vpu_pool1d_internal.h"
+#endif
 
 #include "weights_q.h"
 #include "random_embedding.h"
@@ -35,6 +41,7 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
 }
 
 #ifdef WEIGHTS_Q_H
+#if NN_BACKEND_CPU
     void sentence_1dcnn_i8() {
         printf("1D CNN Inference Demo\n");
         printf("Initializing ping-pong buffers...\n");
@@ -148,6 +155,8 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         
     }
 
+#endif
+#if NN_BACKEND_VECTOR
     void sentence_i8_rvv() {
         printf("1D CNN Inference RVV INT8 Demo\n");
         printf("Initializing ping-pong buffers...\n");
@@ -276,9 +285,13 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
 
     }
 #endif
+#endif
 
 int main() {
-    //sentence_i8_rvv();
+#if NN_BACKEND_VECTOR
     sentence_all_i8_rvv();
+#else
+    sentence_all_i8();
+#endif
     return 0;
 }
