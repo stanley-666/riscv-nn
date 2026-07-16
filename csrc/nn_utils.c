@@ -1,10 +1,6 @@
 #include "nn_utils.h"
 /* Utility functions for 1D CNN on embedded RISC-V System */
 
-#define ALIGNMENT 64 // 64-byte alignment for cache line
-#define malloc(size)   DO_NOT_USE_MALLOC_USE_SAFE_MALLOC
-#define calloc(n, s)   DO_NOT_USE_CALLOC_USE_SAFE_CALLOC
-
 static inline float gelu_scalar_f32(float x)
 {
     return 0.5f * x * (1.0f + erff(x * 0.70710678118654752f));
@@ -59,34 +55,6 @@ size_t sizeof_dtype(elem_type t) {
         case ELEM_FLOAT16: return 2;
         case ELEM_FLOAT32: return sizeof(float);
         default: return 1;
-    }
-}
-
-void *safe_malloc(size_t size) {
-    size_t aligned_size = (size + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
-    void *ptr = aligned_alloc(ALIGNMENT, aligned_size);
-    if (!ptr) {
-        fprintf(stderr, "aligned_alloc failed for size %zu (alignment %d)\n", size, ALIGNMENT);
-        exit(EXIT_FAILURE);
-    }
-    return ptr;
-}
-
-void *safe_calloc(size_t num, size_t size) {
-    size_t total = num * size;
-    size_t aligned_size = (total + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
-    void *ptr = aligned_alloc(ALIGNMENT, aligned_size);
-    if (!ptr) {
-        fprintf(stderr, "aligned_alloc failed for calloc size %zu (alignment %d)\n", aligned_size, ALIGNMENT);
-        exit(EXIT_FAILURE);
-    }
-    memset(ptr, 0, aligned_size);
-    return ptr;
-}
-
-void safe_free(void *ptr) {
-    if (ptr) {
-        free(ptr);
     }
 }
 

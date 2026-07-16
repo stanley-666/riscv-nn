@@ -7,11 +7,14 @@
 #include "nn_utils.h"
 #include "nn_infer_cpu.h"
 #include "nn_infer_vpu.h"
+#include "nn_ops.h"
 
 #include "gesture_input.h"
 #include "weights_fused_fp32.h"
 
 #define GESTURE_MAX_ELEMS 12000  // max tensor elements across the model (float)
+#define SOFTMAX_WARMUP_RUNS 5
+#define SOFTMAX_MEASURED_RUNS 100
 static float buffer1_static[GESTURE_MAX_ELEMS] __attribute__((aligned(64)));
 static float buffer2_static[GESTURE_MAX_ELEMS] __attribute__((aligned(64)));
 
@@ -70,14 +73,44 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
             clock_t start_time = clock();
             uint64_t start_cycle = read_rdcycle();
             forward_fp32_vpu(model, (void *)gestures[g]);
-            softmax_f32((float*)buffer2, (float*)buffer1, 4);
+            softmax_f32_rvv((float*)buffer2, (float*)buffer1, 4);
             uint64_t end_cycle = read_rdcycle();
             clock_t end_time = clock();
             float* output = (float *) buffer1;
+            float reference[4];
+            float max_error = 0.0f;
+            float probability_sum = 0.0f;
+            softmax_f32((float *)buffer2, reference, 4);
+            for (int i = 0; i < 4; ++i) {
+                float error = output[i] - reference[i];
+                if (error < 0.0f) error = -error;
+                if (error > max_error) max_error = error;
+                probability_sum += output[i];
+            }
+            for (int i = 0; i < SOFTMAX_WARMUP_RUNS; ++i) {
+                softmax_f32_rvv((float *)buffer2, output, 4);
+                softmax_f32((float *)buffer2, reference, 4);
+            }
+            uint64_t rvv_softmax_start = read_rdcycle();
+            for (int i = 0; i < SOFTMAX_MEASURED_RUNS; ++i)
+                softmax_f32_rvv((float *)buffer2, output, 4);
+            uint64_t rvv_softmax_cycles = read_rdcycle() - rvv_softmax_start;
+            uint64_t expf_softmax_start = read_rdcycle();
+            for (int i = 0; i < SOFTMAX_MEASURED_RUNS; ++i)
+                softmax_f32((float *)buffer2, reference, 4);
+            uint64_t expf_softmax_cycles = read_rdcycle() - expf_softmax_start;
             uint64_t cycle_diff = end_cycle - start_cycle;
             printf("[%s] Inference cycles: %lu cycles\n", gesture_names[g], cycle_diff);
             double elapsed_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
             printf("[%s] Inference time: %.6f seconds\n", gesture_names[g], elapsed_time);
+            printf("[%s] RVV Softmax sum: %.8f, max |RVV-reference|: %.8f\n",
+                   gesture_names[g], probability_sum, max_error);
+            printf("[%s] Softmax average: RVV=%lu cycles, expf=%lu cycles, difference=%ld cycles\n",
+                   gesture_names[g],
+                   (unsigned long)(rvv_softmax_cycles / SOFTMAX_MEASURED_RUNS),
+                   (unsigned long)(expf_softmax_cycles / SOFTMAX_MEASURED_RUNS),
+                   (long)(rvv_softmax_cycles / SOFTMAX_MEASURED_RUNS) -
+                   (long)(expf_softmax_cycles / SOFTMAX_MEASURED_RUNS));
             //printf("[%s] Output vector (4): \ngesture_0_score : %.6f\ngesture_1_score : %.6f\ngesture_2_score : %.6f\ngesture_3_score : %.6f\n", gesture_names[g], output[0], output[1], output[2], output[3]);
             float sorted_scores[4];
             int sorted_idx[4];

@@ -1,9 +1,20 @@
 #include "nn_infer_vpu.h"
+#include "nn_ops.h"
+#include "backends/riscv/vector/ops/conv1d/nn_ops_vpu_conv1d_fp32_internal.h"
+#include "backends/riscv/vector/ops/conv1d/nn_ops_vpu_conv1d_i8_internal.h"
 #include <string.h>
 #include <time.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #define LOGITS_PRINT_COUNT 8
+
+static inline uint64_t inference_read_cycle(void)
+{
+    uint64_t cycles;
+    __asm__ volatile("rdcycle %0" : "=r"(cycles));
+    return cycles;
+}
 
 static void dump_layer_logits_i8(const NNModule *layer, int layer_idx, const void *tensor)
 {
@@ -44,14 +55,14 @@ void forward_int8_vpu(CNN *net, void *input)
         switch (currentLayer->type)
         {
         case CONV1D:        
-            conv1d_i8_vpu(currentLayer, src, dst);
+            conv1d_i8_vpu_im2col_unroll8_acc2_m8(currentLayer, src, dst);
             break;
         case CONV2D:
             {
                 void *conv_in = src;
                 if (currentLayer->params.conv2d.input_override)
                     conv_in = currentLayer->params.conv2d.input_override;
-                conv2d_int8_vpu(currentLayer, conv_in, dst);
+            conv2d_int8_vpu_im2col_m8(currentLayer, conv_in, dst);
             }
             break;
         case POOL1D:
@@ -104,7 +115,18 @@ void forward_int8_vpu(CNN *net, void *input)
 
 void forward_fp32_vpu(CNN *net, void *input)
 {
+    forward_fp32_vpu_profile(net, input, NULL);
+}
+
+void forward_fp32_vpu_profile(CNN *net, void *input, NNInferenceProfile *profile)
+{
+    uint64_t total_start = 0;
     NNModule *currentLayer = net->firstModule;
+    if (profile) {
+        total_start = inference_read_cycle();
+        profile->total_cycles = 0;
+        profile->num_layers = 0;
+    }
     if (forward_input_bytes > 0)
         memcpy(buffer1, input, forward_input_bytes);
     else 
@@ -115,17 +137,20 @@ void forward_fp32_vpu(CNN *net, void *input)
     while (currentLayer != NULL)
     {    
         int skip_swap = 0;
+        uint64_t layer_start = 0;
+        if (profile)
+            layer_start = inference_read_cycle();
         switch (currentLayer->type)
         {
         case CONV1D:   
-            conv1d_fp32_vpu(currentLayer, src, dst);
+            conv1d_fp32_vpu_im2col_unroll8_acc2_m8(currentLayer, src, dst);
             break;
         case CONV2D:
             {
                 void *conv_in = src;
                 if (currentLayer->params.conv2d.input_override)
                     conv_in = currentLayer->params.conv2d.input_override;
-                conv2d_fp32_vpu(currentLayer, conv_in, dst);
+            conv2d_fp32_vpu_im2col(currentLayer, conv_in, dst);
             }
             break;
         case POOL1D:      
@@ -166,6 +191,12 @@ void forward_fp32_vpu(CNN *net, void *input)
             add_vpu(currentLayer, src, dst);
             break;
         }
+        if (profile && layer_idx < NN_INFERENCE_PROFILE_MAX_LAYERS) {
+            uint64_t layer_end = inference_read_cycle();
+            profile->layers[layer_idx].type = currentLayer->type;
+            profile->layers[layer_idx].cycles = layer_end - layer_start;
+            profile->num_layers = layer_idx + 1;
+        }
         layer_idx++;
 
         if (!skip_swap) {
@@ -175,4 +206,6 @@ void forward_fp32_vpu(CNN *net, void *input)
         }
         currentLayer = currentLayer->next;
     }
+    if (profile)
+        profile->total_cycles = inference_read_cycle() - total_start;
 }

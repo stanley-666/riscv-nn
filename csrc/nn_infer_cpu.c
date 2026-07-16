@@ -1,4 +1,5 @@
 #include "nn_infer_cpu.h"
+#include "backends/riscv/cpu/ops/nn_ops_cpu_internal.h"
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
