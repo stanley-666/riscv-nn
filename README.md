@@ -1,21 +1,22 @@
-# RISC-V 1D CNN Inference
+# RISC-V Inference
 
-This repository provides a C-based 1D CNN inference stack targeting RISC-V,
-with both scalar CPU and vector (RVV/VPU) execution paths, plus testbenches
-and Python utilities for model preparation.
+This repository provides a C-based neural-network inference stack targeting
+RISC-V scalar CPUs, the RISC-V Vector Extension (RVV), and the Gemmini matrix
+accelerator. It includes Linux/Spike-pk and bare-metal execution paths,
+testbenches, and Python utilities for model preparation.
 
 ## Architecture Overview
 
 - Model API and layer definitions live in `header/` and expose a PyTorch-like
-  naming style for building 1D CNN graphs in C.
+  naming style for building neural-network graphs in C.
 - Core inference code is in `csrc/`, split into layer logic, utilities, and
   backend-specific kernels (CPU and VPU/RVV).
 - Testbenches in `testbench/` provide end-to-end inference runs for different
   models and data types, and include Spike performance results per test.
 - Python utilities in `py/` support training, calibration, or data prep for
   specific models (e.g., sentence or ResNet variants).
-- `gemmini/` contains Gemmini integration and related software for accelerator
-  experiments.
+- Gemmini ISA support and accelerator operators live under
+  `csrc/backends/riscv/gemmini/`.
 
 ### Public and Internal Headers
 
@@ -38,15 +39,301 @@ repository benchmarks but are not part of the stable public API.
 ├── csrc/               # Core inference and runtime source
 │   └── backends/riscv/
 │       ├── cpu/ops/    # CPU/reference operators
-│       └── vector/ops/ # Explicit RVV operators grouped by family
+│       ├── vector/ops/ # Explicit RVV operators grouped by family
+│       └── gemmini/ops/ # Gemmini ISA support and accelerator operators
 ├── header/             # Public headers and model/layer API
 ├── baremetal/          # Bare-metal startup, runtime, linker, and app adapters
 ├── testbench/          # End-to-end model testbenches + Spike results
 ├── py/                 # Training/calibration/data utilities
-└── gemmini/            # Gemmini integration and tooling
+└── scripts/            # Configure, build, and checked flashing helpers
 ```
 
-## Complete Build Guide
+## CMake and Ninja Build Guide
+
+CMake generates the build graph and Ninja performs incremental and parallel
+compilation. The legacy Makefiles remain temporarily available for build
+regression comparisons, but new users should use this section.
+
+### Prerequisites
+
+- CMake 3.16 or newer
+- Ninja
+- `riscv64-unknown-linux-gnu-gcc` for Linux or Spike `pk`
+- `riscv64-unknown-elf-gcc` for bare-metal images
+
+This repository may be used from a shell environment that places an older
+CMake first in `PATH`. Check the selected version before configuring:
+
+```sh
+/usr/bin/cmake --version
+ninja --version
+```
+
+### Short build command
+
+The helper configures a separate Ninja directory for every platform, backend,
+testbench, and ISA profile, then builds it using all available workers:
+
+```sh
+./scripts/configure_build.sh <linux-pk|baremetal> \
+    <cpu|vector|all> <testbench> [profile]
+```
+
+Linux scalar CPU baseline:
+
+```sh
+./scripts/configure_build.sh linux-pk cpu sentence_inference_fp32 default
+```
+
+Linux/Spike explicit RVV build:
+
+```sh
+./scripts/configure_build.sh linux-pk vector sentence_inference_fp32 zvl128b
+```
+
+Bare-metal explicit RVV build:
+
+```sh
+./scripts/configure_build.sh baremetal vector sentence_inference_fp32 V128D128B
+```
+
+The profile argument is optional. It defaults to `default` for Linux CPU,
+`zvl128b` for Linux vector, and `V128D128B` for bare-metal vector builds.
+
+### Direct CMake commands
+
+The helper is only a convenience wrapper. The equivalent Linux/Spike command
+is:
+
+```sh
+/usr/bin/cmake -S . \
+    -B build/cmake/linux-pk-sentence-vector-zvl128b \
+    -G Ninja \
+    -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/riscv-linux-gnu.cmake \
+    -DNN_PLATFORM=linux-pk \
+    -DNN_BACKEND=vector \
+    -DNN_TESTBENCH=sentence_inference_fp32 \
+    -DNN_CONFIG=zvl128b \
+    -DNN_LINK_MODE=static
+
+/usr/bin/cmake --build \
+    build/cmake/linux-pk-sentence-vector-zvl128b --parallel
+```
+
+Run the generated static ELF with Spike:
+
+```sh
+spike --isa=rv64gcv_zvbb_zvl128b_zve64d \
+    --varch=vlen:128,elen:64 \
+    pk \
+    build/linux-pk/sentence_inference_fp32/zvl128b/vector/static/sentence_inference_fp32
+```
+
+The equivalent bare-metal configuration is:
+
+```sh
+/usr/bin/cmake -S . \
+    -B build/cmake/baremetal-sentence-vector-V128D128B \
+    -G Ninja \
+    -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/riscv-baremetal.cmake \
+    -DNN_PLATFORM=baremetal \
+    -DNN_BACKEND=vector \
+    -DNN_TESTBENCH=sentence_inference_fp32 \
+    -DNN_HARDWARE_CONFIG=V128D128B
+
+/usr/bin/cmake --build \
+    build/cmake/baremetal-sentence-vector-V128D128B --parallel
+```
+
+Ninja's default bare-metal target creates both the ELF and raw binary. Generate
+the optional mixed source/assembly dump with:
+
+```sh
+/usr/bin/cmake --build \
+    build/cmake/baremetal-sentence-vector-V128D128B \
+    --target baremetal-dump --parallel
+```
+
+Generated files keep the public output layout independent of the internal
+Ninja directory:
+
+```text
+build/linux-pk/<testbench>/<config>/<backend>/<link-mode>/<testbench>
+build/baremetal/<testbench>/<hardware>_nn_rvv_baremetal.elf
+build/baremetal/<testbench>/<hardware>_nn_rvv_baremetal.bin
+build/baremetal/<testbench>/<hardware>_nn_rvv_baremetal.map
+build/baremetal/<testbench>/<hardware>_nn_rvv_baremetal.dump
+```
+
+### Supported build selections
+
+Linux testbench names are:
+
+```text
+gesture_recognition_fp32
+kyber_nouv_rvv
+resnet50
+sentence_inference_fp32
+sentence_inference_int8
+```
+
+`resnet50` additionally requires the generated, git-ignored
+`testbench/resnet50/resnet50_weights.h`. Generate the model files using the
+tools under `py/resnet50/` before configuring that target; CMake stops during
+configuration with a clear error when the header is absent.
+
+Linux profiles are `default`, `zvl64b`, `zvl128b`, `zvl256b`, `zvl512b`,
+`zvl512b_cycle`, `RVV`, `MINV64D64RocketGENESYS2Config`, and
+`DSPV128D128RocketGENESYS2Config`. Use `default` for the scalar CPU baseline.
+Compiler auto-vectorization is disabled unless CMake is configured with
+`-DNN_AUTO_VECTORIZE=ON`; explicit RVV intrinsics remain enabled.
+
+The Gemmini backend defaults to the latest native/per-tensor SentenceCNN path.
+It uses native `tiled_conv_auto`, Gemmini store-scale requantization and ReLU,
+staged Gemmini pooling, and Gemmini fully connected layers. The earlier
+per-channel im2col path remains as a regression fallback. Operator contracts
+and current limitations are documented in
+[`csrc/backends/riscv/gemmini/ops/README.md`](csrc/backends/riscv/gemmini/ops/README.md).
+
+Build and run the imported Gemmini SentenceCNN on Spike `pk` using the
+Chipyard toolchain and extension plugin:
+
+```sh
+source /home/mc2/chipyard_1.13.0/chipyard/env.sh
+
+./scripts/configure_build.sh \
+    linux-pk gemmini sentence_gemmini default
+
+/usr/bin/cmake --build \
+    build/cmake/linux-pk-sentence_gemmini-gemmini-default \
+    --target run-spike-gemmini
+```
+
+The equivalent direct execution command is:
+
+```sh
+spike --isa=rv64gc_zicntr_zihpm --extension=gemmini \
+    "$RISCV/riscv64-unknown-elf/bin/pk" \
+    build/linux-pk/sentence_gemmini/default/gemmini/static/sentence_gemmini
+```
+
+The current native/per-tensor reference produces INT8 logit `23` and a correct
+classification on both Spike/pk and Gemmini hardware. The recorded hardware
+run takes `1,682,812` cycles at 50 MHz.
+
+Use the Chipyard Linux cross compiler for this configuration. A GCV-specific
+sysroot may contain vectorized libc routines even when application sources are
+compiled with `-march=rv64gc`; such an ELF traps on a non-vector Gemmini Spike
+configuration before reaching the accelerator.
+
+Bare-metal adapters are `sentence_inference_fp32`, `sentence_inference_int8`,
+`gesture_model`, and `kyber`. Their hardware profiles are `V128D128B`,
+`V256D128B`, and `V512D128B`. Bare-metal adapters currently select the vector
+backend.
+
+Build the Gemmini bare-metal image with the main repository runtime:
+
+```sh
+./scripts/configure_build.sh \
+    baremetal gemmini sentence_gemmini GEMMINI
+```
+
+This configuration records the reference Makefile requirements in CMake:
+RV64GC/LP64D, medany, freestanding compilation, Gemmini preallocation, no
+startup libraries, the common `baremetal/linker.ld`, split minilib sources,
+syscalls, trap handler, and startup assembly. Generated files are:
+
+```text
+build/baremetal/sentence_gemmini/GEMMINI_nn_gemmini_baremetal.elf
+build/baremetal/sentence_gemmini/GEMMINI_nn_gemmini_baremetal.bin
+build/baremetal/sentence_gemmini/GEMMINI_nn_gemmini_baremetal.map
+```
+
+Generate the disassembly with:
+
+```sh
+/usr/bin/cmake --build \
+    build/cmake/baremetal-sentence_gemmini-gemmini-GEMMINI \
+    --target baremetal-dump
+```
+
+The bare-metal ELF uses the board UART MMIO console and hardware boot ABI. It
+can be loaded by Spike for instruction-level debugging, but standard Spike
+reports that `tohost`/`fromhost` are absent and cannot display the board UART or
+observe normal program termination. Use the Linux/`pk` target above for the
+current automated Gemmini Spike test:
+
+```sh
+./scripts/configure_build.sh linux-pk gemmini sentence_gemmini default
+/usr/bin/cmake --build \
+    build/cmake/linux-pk-sentence_gemmini-gemmini-default \
+    --target run-spike-gemmini
+```
+
+A future HTIF console/exit adapter may enable a separate Spike-oriented
+bare-metal configuration without changing the flashable hardware runtime.
+
+To use a non-default compiler installation, set the prefix while creating a
+fresh build directory:
+
+```sh
+/usr/bin/cmake -S . -B build/cmake/custom-linux -G Ninja \
+    -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/riscv-linux-gnu.cmake \
+    -DRISCV_LINUX_PREFIX=/opt/riscv-linux/bin/riscv64-unknown-linux-gnu- \
+    -DNN_PLATFORM=linux-pk -DNN_BACKEND=vector \
+    -DNN_TESTBENCH=sentence_inference_fp32 -DNN_CONFIG=zvl128b
+```
+
+The bare-metal equivalent variable is `RISCV_BAREMETAL_PREFIX`.
+
+### Cleaning
+
+Remove one configuration without touching other builds:
+
+```sh
+/usr/bin/cmake --build <ninja-build-directory> --target clean
+```
+
+This removes files known to that Ninja configuration. Public artifacts from
+other configurations intentionally remain under `build/`. To remove every
+generated configuration and artifact, remove the repository's `build/`
+directory after confirming that it contains no manually stored data.
+
+### SD-card flashing
+
+First build and inspect the raw `.bin`. Then reconfigure the same bare-metal
+Ninja directory with the whole SD-card device. Omitting confirmation performs
+the safety check and intentionally returns status 2 without writing:
+
+```sh
+/usr/bin/cmake -S . \
+    -B build/cmake/baremetal-sentence-vector-V128D128B \
+    -DNN_SDCARD_DEVICE=/dev/sdc
+
+/usr/bin/cmake --build \
+    build/cmake/baremetal-sentence-vector-V128D128B \
+    --target baremetal-flash
+```
+
+After checking the printed model, type, size, and empty mount point, authorize
+the destructive write and run the target again:
+
+```sh
+/usr/bin/cmake -S . \
+    -B build/cmake/baremetal-sentence-vector-V128D128B \
+    -DNN_SDCARD_DEVICE=/dev/sdc \
+    -DNN_FLASH_CONFIRM=YES
+
+/usr/bin/cmake --build \
+    build/cmake/baremetal-sentence-vector-V128D128B \
+    --target baremetal-flash
+```
+
+The default destination is 512-byte block 34. Override it only when the boot
+flow requires another location with `-DNN_SDCARD_BLOCK=<block>`. Selecting the
+wrong device destroys data.
+
+## Legacy Make Build Guide
 
 ### Quick Start
 
@@ -479,16 +766,60 @@ device or block can permanently destroy data. Do not remove the SD card while
 `dd` is running; wait until the command prints `Flash completed.` and returns to
 the shell prompt.
 
-## Supported Architectures
+## Supported Architectures and Chipyard
 
-The optimized kernels target 64-bit RISC-V systems implementing the RISC-V
-Vector Extension. The current build profiles use the `lp64d` ABI and cover
-minimum vector lengths from 64 to 512 bits.
+The repository is designed to work with SoCs generated by the open-source
+Chipyard project. Chipyard supplies configurable Rocket/BOOM-class RISC-V
+cores, the Gemmini accelerator integration, simulation infrastructure, and
+FPGA prototyping flows. This repository supplies the neural-network operators,
+model testbenches, hosted executables, and flashable bare-metal programs that
+run on those systems.
 
-| Environment | Toolchain target | Configured vector profiles |
-| --- | --- | --- |
-| Linux and Spike pk | `riscv64-unknown-linux-gnu` | Zvl128b, Zvl256b, Zvl512b |
-| Bare-metal | `riscv64-unknown-elf` | Zvl128b, Zvl256b, Zvl512b |
+| Backend | Chipyard hardware | Execution environments | Notes |
+| --- | --- | --- | --- |
+| `cpu` | 64-bit scalar RISC-V core | Linux, Spike/pk, bare-metal runtime | Reference and baseline kernels; RVV auto-vectorization is disabled by default |
+| `vector` | RISC-V core configured with RVV | Linux, Spike/pk, FPGA bare-metal | Explicit RVV intrinsics; current profiles cover minimum VLEN values from 64 to 512 bits |
+| `gemmini` | Chipyard SoC with Gemmini RoCC accelerator | Gemmini-enabled Spike/pk, FPGA bare-metal | Native INT8 Conv1D, fused requantization/ReLU, staged pooling, and FC |
+
+The current ABI is RV64 `lp64d`. Linux/pk builds use a
+`riscv64-unknown-linux-gnu` toolchain, while flashable programs use a
+`riscv64-unknown-elf` bare-metal toolchain. The supplied configuration names,
+such as `MINV64D64RocketGENESYS2Config`,
+`DSPV128D128RocketGENESYS2Config`, `V128D128B`, `V256D128B`, and
+`V512D128B`, describe the profiles already wired into this repository.
+
+### How this repository fits into Chipyard
+
+```text
+Chipyard SoC configuration
+        |
+        +-- scalar RISC-V core ------> BACKEND=cpu
+        +-- RVV-enabled core --------> BACKEND=vector
+        +-- Gemmini RoCC accelerator -> BACKEND=gemmini
+        |
+        +-- Spike/pk simulation or FPGA bitstream
+                          |
+                          +-- executable from build/linux-pk/
+                          +-- image from build/baremetal/
+```
+
+For functional Gemmini simulation, source the Chipyard environment before
+running the repository target:
+
+```sh
+source /path/to/chipyard/env.sh
+./scripts/configure_build.sh linux-pk gemmini sentence_gemmini default
+/usr/bin/cmake --build \
+    build/cmake/linux-pk-sentence_gemmini-gemmini-default \
+    --target run-spike-gemmini
+```
+
+For FPGA execution, first generate and program a compatible Chipyard bitstream,
+then build this repository with the matching backend/profile. The boot ROM,
+memory map, UART address, ISA extensions, vector length, Gemmini parameters,
+clock frequency, and SD-card load offset must agree with the selected Chipyard
+configuration. A profile name alone cannot make an incompatible bitstream run
+the program.
 
 The source also contains scalar reference paths used for correctness checks.
 Custom VPU performance counters and privileged CSRs depend on the execution
@@ -498,10 +829,10 @@ environment and are not assumed to be available in Linux user mode.
 
 | Operator family | Data types | Implementations |
 | --- | --- | --- |
-| Conv1D | INT8, FP32 | Scalar reference and RVV im2col kernels |
+| Conv1D | INT8, FP32 | Scalar reference, RVV im2col, and Gemmini native INT8 kernels |
 | Conv2D | INT8, FP32 | Scalar reference and RVV im2col kernels |
-| Fully connected | INT8, FP32 | Scalar reference and RVV kernels |
-| Pooling | INT8, FP32 | 1D and 2D scalar/RVV kernels |
+| Fully connected | INT8, FP32 | Scalar reference, RVV, and Gemmini INT8 kernels |
+| Pooling | INT8, FP32 | 1D/2D scalar and RVV kernels; staged Gemmini INT8 pooling |
 | Activation | INT8, FP32 | ReLU, leaky ReLU, softmax, and supporting post-processing |
 | Transformer | FP32 | Layer normalization and attention support |
 | Tensor utilities | INT8, FP32 | Transpose, add, save, and layout helpers |
@@ -519,16 +850,18 @@ conv1d_fp32_vpu_im2col_unroll8_acc2_m8
 
 This project is developed by MC2 Lab at National Taiwan Normal University.
 It builds on the RISC-V ISA and Vector Extension ecosystem, the GNU RISC-V
-toolchains and vector intrinsics, and the Spike ISA simulator with the proxy
-kernel for hosted RISC-V testing. The model-building interface and test flow
-are inspired by common neural-network framework conventions.
+toolchains and vector intrinsics, the Chipyard SoC-generation ecosystem,
+Gemmini, and the Spike ISA simulator with the proxy kernel for hosted RISC-V
+testing. The model-building interface and test flow are inspired by common
+neural-network framework conventions.
 
 ## License
 
 The project-owned source code is licensed under the Apache License 2.0. See
 [`LICENSE`](LICENSE) for the complete terms. Third-party components retain
-their original licenses; in particular, `gemmini/rocc-software/` includes its
-own license and copyright notices.
+their original licenses; in particular, the headers under
+`csrc/backends/riscv/gemmini/ops/include/` retain their Gemmini/RoCC copyright and
+license notices.
 
 ## Testbench Notes
 
