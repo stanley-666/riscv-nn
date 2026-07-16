@@ -29,7 +29,7 @@ linux-pk)
         -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/riscv-linux-gnu.cmake \
         -DNN_PLATFORM=linux-pk -DNN_BACKEND="$backend" \
         -DNN_TESTBENCH="$testbench" -DNN_CONFIG="$profile" \
-        -DNN_LINK_MODE=static
+        -DNN_LINK_MODE=static -DNN_AUTO_VECTORIZE=OFF
     ;;
 baremetal)
     if [ -z "$profile" ]; then
@@ -43,7 +43,8 @@ baremetal)
     "$cmake_bin" -S . -B "$build_dir" -G Ninja \
         -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/riscv-baremetal.cmake \
         -DNN_PLATFORM=baremetal -DNN_BACKEND="$backend" \
-        -DNN_TESTBENCH="$testbench" -DNN_HARDWARE_CONFIG="$profile"
+        -DNN_TESTBENCH="$testbench" -DNN_HARDWARE_CONFIG="$profile" \
+        -DNN_AUTO_VECTORIZE=OFF
     ;;
 *)
     echo "Unsupported platform: $platform"

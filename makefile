@@ -23,31 +23,31 @@ CORE_OBJS := $(patsubst csrc/%.c,$(OBJ_DIR)/csrc/%.o,$(CORE_SRC))
 
 # Architecture and ABI settings
 ifeq ($(CONFIG), default)
-  ARCH := rv64gc
+  ARCH := rv64gc_zicntr_zihpm
   ABI  := lp64d
   TUNE := rocket
 endif
 
 ifeq ($(CONFIG), zvl64b)
-  ARCH := rv64gcv_zvbb_zvl64b_zve64d
+  ARCH := rv64gcv_zicntr_zihpm_zvbb_zvl64b_zve64d
   ABI  := lp64d
   TUNE := 
 endif
 
 ifeq ($(CONFIG), zvl128b)
-  ARCH := rv64gcv_zvbb_zvl128b_zve64d
+  ARCH := rv64gcv_zicntr_zihpm_zvbb_zvl128b_zve64d
   ABI  := lp64d
   TUNE := rocket
 endif
 
 ifeq ($(CONFIG), zvl256b)
-  ARCH := rv64gcv_zvbb_zvl256b_zve64d
+  ARCH := rv64gcv_zicntr_zihpm_zvbb_zvl256b_zve64d
   ABI  := lp64d
   TUNE := rocket
 endif
 
 ifeq ($(CONFIG), zvl512b)
-  ARCH := rv64gcv_zvbb_zvl512b_zve64d
+  ARCH := rv64gcv_zicntr_zihpm_zvbb_zvl512b_zve64d
   ABI  := lp64d
   TUNE := rocket
 endif
@@ -59,19 +59,19 @@ ifeq ($(CONFIG), zvl512b_cycle)
 endif
 
 ifeq ($(CONFIG), RVV)
-  ARCH := rv64imafdcbvzicsr_zifencei_zihpm_zvl256b_zve64d_zvfh_zfh_zba_zbb_zbs_zvbb
+  ARCH := rv64imafdcbvzicsr_zifencei_zicntr_zihpm_zvl256b_zve64d_zvfh_zfh_zba_zbb_zbs_zvbb
   ABI  := lp64d
   TUNE := rocket
 endif
 
 ifeq ($(CONFIG), MINV64D64RocketGENESYS2Config)
-  ARCH := rv64imafdcbzicsr_zifencei_zihpm_zvl64b_zve64d_zvfh_zfh_zba_zbb_zbs_zvbb
+  ARCH := rv64imafdcbzicsr_zifencei_zicntr_zihpm_zvl64b_zve64d_zvfh_zfh_zba_zbb_zbs_zvbb
   ABI  := lp64d
   TUNE := rocket 
 endif
 
 ifeq ($(CONFIG), DSPV128D128RocketGENESYS2Config)
-  ARCH := rv64imafdcbvzicsr_zifencei_zihpm_zvl128b_zve64d_zvfh_zfh_zba_zbb_zbs_zvbb
+  ARCH := rv64imafdcbvzicsr_zifencei_zicntr_zihpm_zvl128b_zve64d_zvfh_zfh_zba_zbb_zbs_zvbb
   ABI  := lp64d
   TUNE := rocket
 endif

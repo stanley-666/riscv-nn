@@ -69,6 +69,48 @@ CMake first in `PATH`. Check the selected version before configuring:
 ninja --version
 ```
 
+### Load the Chipyard environment first
+
+Before building or running the scalar CPU and Gemmini Linux/Spike programs,
+load Chipyard's environment in the same shell:
+
+```sh
+source ~/chipyard_1.13.0/chipyard/env.sh
+```
+
+If Chipyard is installed elsewhere, replace the path above with that
+installation's `env.sh`. This environment provides Spike, `pk`, and the
+Chipyard tool paths used by the commands below. Confirm them before building:
+
+```sh
+command -v spike
+test -x "$RISCV/riscv64-unknown-elf/bin/pk"
+```
+
+For a strict scalar `rv64gc_zicntr_zihpm` baseline, the Linux compiler and its
+static libc/sysroot must also be built for scalar RV64GC. An RVV-enabled Linux
+sysroot can insert vector instructions through libc even though this
+repository disables compiler auto-vectorization. Loading `env.sh` provides the
+simulator environment; it does not by itself prove that the selected Linux
+sysroot is scalar.
+
+### RVV builds use the system compiler
+
+Do **not** source Chipyard's `env.sh` before compiling the generic RVV
+profiles. Start from a shell whose `PATH` selects the separately installed RVV
+Linux cross compiler:
+
+```sh
+command -v riscv64-unknown-linux-gnu-gcc
+riscv64-unknown-linux-gnu-gcc --version
+```
+
+The compiler reported above must be the RVV compiler installed in the system
+`PATH`, not the compiler injected by Chipyard's environment. CMake records the
+compiler when a build directory is first configured, so use the backend's
+separate build directory and do not reuse a directory previously configured
+with another toolchain.
+
 ### Short build command
 
 The helper configures a separate Ninja directory for every platform, backend,
@@ -76,19 +118,28 @@ testbench, and ISA profile, then builds it using all available workers:
 
 ```sh
 ./scripts/configure_build.sh <linux-pk|baremetal> \
-    <cpu|vector|all> <testbench> [profile]
+    <cpu|vector|gemmini|all> <testbench> [profile]
 ```
 
 Linux scalar CPU baseline:
 
 ```sh
+source ~/chipyard_1.13.0/chipyard/env.sh
+
 ./scripts/configure_build.sh linux-pk cpu sentence_inference_fp32 default
+
+spike --isa=rv64gc_zicntr_zihpm \
+    pk \
+    build/linux-pk/sentence_inference_fp32/default/cpu/static/sentence_inference_fp32
 ```
 
 Linux/Spike explicit RVV build:
 
 ```sh
-./scripts/configure_build.sh linux-pk vector sentence_inference_fp32 zvl128b
+# Run this from a shell that has not sourced Chipyard env.sh.
+command -v riscv64-unknown-linux-gnu-gcc
+
+./scripts/configure_build.sh linux-pk vector sentence_inference_fp32 zvl512b_cycle
 ```
 
 Bare-metal explicit RVV build:
@@ -97,8 +148,96 @@ Bare-metal explicit RVV build:
 ./scripts/configure_build.sh baremetal vector sentence_inference_fp32 V128D128B
 ```
 
-The profile argument is optional. It defaults to `default` for Linux CPU,
-`zvl128b` for Linux vector, and `V128D128B` for bare-metal vector builds.
+The profile argument is optional. The helper selects these defaults when it is
+omitted:
+
+| Platform | Backend | Default profile |
+| --- | --- | --- |
+| `linux-pk` | `cpu` | `default` |
+| `linux-pk` | `vector` or `all` | `zvl128b` |
+| `linux-pk` | `gemmini` | `default` |
+| `baremetal` | `vector` | `V128D128B` |
+| `baremetal` | `gemmini` | `GEMMINI` |
+
+### ISA profiles
+
+For Linux/Spike builds, `[profile]` becomes `NN_CONFIG` and selects the
+compiler `-march` value. Use `default` for the scalar CPU baseline and a
+vector-capable profile for the explicit RVV backend:
+
+| Profile | Compiler `-march` | Intended use |
+| --- | --- | --- |
+| `default` | `rv64gc_zicntr_zihpm` | Scalar CPU baseline or Gemmini host code |
+| `zvl64b` | `rv64gcv_zicntr_zihpm_zvbb_zvl64b_zve64d` | Generic RVV, VLEN >= 64 |
+| `zvl128b` | `rv64gcv_zicntr_zihpm_zvbb_zvl128b_zve64d` | Generic RVV, VLEN >= 128 |
+| `zvl256b` | `rv64gcv_zicntr_zihpm_zvbb_zvl256b_zve64d` | Generic RVV, VLEN >= 256 |
+| `zvl512b` | `rv64gcv_zicntr_zihpm_zvbb_zvl512b_zve64d` | Generic RVV, VLEN >= 512 |
+| `zvl512b_cycle` | `rv64gcv_zicntr_zihpm_zvbb_zvl512b_zve64d` | VLEN=512 RVV cycle benchmark |
+| `RVV` | `rv64imafdcbvzicsr_zifencei_zicntr_zihpm_zvl256b_zve64d_zvfh_zfh_zba_zbb_zbs_zvbb` | Matching Chipyard RVV configuration |
+| `MINV64D64RocketGENESYS2Config` | `rv64imafdcbzicsr_zifencei_zicntr_zihpm_zvl64b_zve64d_zvfh_zfh_zba_zbb_zbs_zvbb` | Matching Genesys2 configuration |
+| `DSPV128D128RocketGENESYS2Config` | `rv64imafdcbvzicsr_zifencei_zicntr_zihpm_zvl128b_zve64d_zvfh_zfh_zba_zbb_zbs_zvbb` | Matching Genesys2 configuration |
+
+The profile controls compilation; Spike must independently be started with a
+compatible `--isa` string. This repository uses Spike 1.1.1-dev, which derives
+VLEN and ELEN from the vector extensions in that ISA string. For example,
+`zvl128b_zve64d` selects VLEN=128 and ELEN=64. This Spike version does not
+provide a separate `--varch` option.
+
+Run the `zvl128b` binary with:
+
+```sh
+spike --isa=rv64gcv_zicntr_zihpm_zvbb_zvl128b_zve64d \
+    pk \
+    build/linux-pk/sentence_inference_fp32/zvl128b/vector/static/sentence_inference_fp32
+```
+
+The scalar CPU teaching configuration is:
+
+```sh
+# Scalar CPU: no V extension and compiler auto-vectorization is disabled.
+source ~/chipyard_1.13.0/chipyard/env.sh
+
+./scripts/configure_build.sh \
+    linux-pk cpu sentence_inference_fp32 default
+
+spike --isa=rv64gc_zicntr_zihpm \
+    "$RISCV/riscv64-unknown-elf/bin/pk" \
+    build/linux-pk/sentence_inference_fp32/default/cpu/static/sentence_inference_fp32
+```
+
+The RVV teaching configuration must be built in a separate shell without
+sourcing Chipyard's `env.sh`:
+
+```sh
+# Explicit RVV intrinsics with VLEN=512.
+command -v riscv64-unknown-linux-gnu-gcc
+
+./scripts/configure_build.sh \
+    linux-pk vector sentence_inference_fp32 zvl512b_cycle
+
+spike --isa=rv64gcv_zicntr_zihpm_zvbb_zvl512b_zve64d \
+    pk \
+    build/linux-pk/sentence_inference_fp32/zvl512b_cycle/vector/static/sentence_inference_fp32
+```
+
+`NN_AUTO_VECTORIZE` is forced to `OFF` by `configure_build.sh`. This keeps the
+CPU baseline scalar and ensures that vector builds measure the repository's
+explicit RVV intrinsic kernels rather than compiler-generated vector loops.
+
+All CPU and RVV benchmark profiles include `zicntr_zihpm` because the
+testbenches read cycle and hardware-performance counters. For bare-metal
+builds, `[profile]` becomes `NN_HARDWARE_CONFIG`:
+
+| Profile | Compiler `-march` or target | Intended target |
+| --- | --- | --- |
+| `V128D128B` | `rv64gcv_zicntr_zihpm_zvl128b_zve64d_zvfh_zfh_zba_zbb_zbs_zvbb` | RVV hardware with VLEN=128 |
+| `V256D128B` | `rv64gcv_zicntr_zihpm_zvl256b_zve64d_zvfh_zfh_zba_zbb_zbs_zvbb` | RVV hardware with VLEN=256 |
+| `V512D128B` | `rv64gcv_zicntr_zihpm_zvl512b_zve64d_zvfh_zfh_zba_zbb_zbs_zvbb` | RVV hardware with VLEN=512 |
+| `GEMMINI` | Gemmini-specific RV64GC build | Gemmini bare-metal target |
+
+The `RVV` and Genesys2 names describe specific hardware configurations. Do not
+select them only because their names contain a desired VLEN; use the matching
+generic `zvl*` profile for ordinary Spike experiments.
 
 ### Direct CMake commands
 
@@ -107,26 +246,26 @@ is:
 
 ```sh
 /usr/bin/cmake -S . \
-    -B build/cmake/linux-pk-sentence-vector-zvl128b \
+    -B build/cmake/linux-pk-sentence_inference_fp32-vector-zvl512b_cycle \
     -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/riscv-linux-gnu.cmake \
     -DNN_PLATFORM=linux-pk \
     -DNN_BACKEND=vector \
     -DNN_TESTBENCH=sentence_inference_fp32 \
-    -DNN_CONFIG=zvl128b \
-    -DNN_LINK_MODE=static
+    -DNN_CONFIG=zvl512b_cycle \
+    -DNN_LINK_MODE=static \
+    -DNN_AUTO_VECTORIZE=OFF
 
 /usr/bin/cmake --build \
-    build/cmake/linux-pk-sentence-vector-zvl128b --parallel
+    build/cmake/linux-pk-sentence_inference_fp32-vector-zvl512b_cycle --parallel
 ```
 
 Run the generated static ELF with Spike:
 
 ```sh
-spike --isa=rv64gcv_zvbb_zvl128b_zve64d \
-    --varch=vlen:128,elen:64 \
+spike --isa=rv64gcv_zicntr_zihpm_zvbb_zvl512b_zve64d \
     pk \
-    build/linux-pk/sentence_inference_fp32/zvl128b/vector/static/sentence_inference_fp32
+    build/linux-pk/sentence_inference_fp32/zvl512b_cycle/vector/static/sentence_inference_fp32
 ```
 
 The equivalent bare-metal configuration is:
@@ -199,7 +338,7 @@ Build and run the imported Gemmini SentenceCNN on Spike `pk` using the
 Chipyard toolchain and extension plugin:
 
 ```sh
-source /home/mc2/chipyard_1.13.0/chipyard/env.sh
+source ~/chipyard_1.13.0/chipyard/env.sh
 
 ./scripts/configure_build.sh \
     linux-pk gemmini sentence_gemmini default
@@ -234,6 +373,8 @@ backend.
 Build the Gemmini bare-metal image with the main repository runtime:
 
 ```sh
+source ~/chipyard_1.13.0/chipyard/env.sh
+
 ./scripts/configure_build.sh \
     baremetal gemmini sentence_gemmini GEMMINI
 ```
@@ -357,13 +498,12 @@ Linux/Spike pk with explicit RVV and a 128-bit VLEN profile:
 make -j$(nproc) linux \
     TESTBENCH=sentence_inference_fp32 \
     BACKEND=vector \
-    CONFIG=zvl128b \
+    CONFIG=zvl512b_cycle \
     LINK_MODE=static
 
-spike --isa=rv64gcv_zvbb_zvl128b_zve64d \
-    --varch=vlen:128,elen:64 \
+spike --isa=rv64gcv_zicntr_zihpm_zvbb_zvl512b_zve64d \
     pk \
-    build/linux-pk/sentence_inference_fp32/zvl128b/vector/static/sentence_inference_fp32
+    build/linux-pk/sentence_inference_fp32/zvl512b_cycle/vector/static/sentence_inference_fp32
 ```
 
 Bare-metal ELF and raw SD-card image for the `V128D128B` hardware profile:
@@ -505,7 +645,7 @@ make linux TESTBENCH=sentence_inference_int8 BACKEND=all CONFIG=zvl512b
 ```
 
 The available Linux testbenches are printed when an invalid `TESTBENCH` is
-given. Architecture profiles include `default` (`rv64gc`), `zvl64b`,
+given. Architecture profiles include `default` (`rv64gc_zicntr_zihpm`), `zvl64b`,
 `zvl128b`, `zvl256b`, `zvl512b`, `zvl512b_cycle`, and the board-specific
 profiles defined in `makefile`. Use `CONFIG=default` with `BACKEND=cpu`; vector
 and `all` builds require a vector-capable profile.
@@ -514,10 +654,11 @@ and `all` builds require a vector-capable profile.
 
 ```sh
 make linux TESTBENCH=sentence_inference_fp32 BACKEND=vector \
-    CONFIG=zvl128b LINK_MODE=static
+    CONFIG=zvl512b_cycle LINK_MODE=static
 
-spike --isa=rv64gcv pk \
-    build/linux-pk/sentence_inference_fp32/zvl128b/vector/static/sentence_inference_fp32
+spike --isa=rv64gcv_zicntr_zihpm_zvbb_zvl512b_zve64d \
+    pk \
+    build/linux-pk/sentence_inference_fp32/zvl512b_cycle/vector/static/sentence_inference_fp32
 ```
 
 For a normal RISC-V Linux userspace with a dynamic loader, request a dynamic
@@ -807,7 +948,7 @@ For functional Gemmini simulation, source the Chipyard environment before
 running the repository target:
 
 ```sh
-source /path/to/chipyard/env.sh
+source ~/chipyard_1.13.0/chipyard/env.sh
 ./scripts/configure_build.sh linux-pk gemmini sentence_gemmini default
 /usr/bin/cmake --build \
     build/cmake/linux-pk-sentence_gemmini-gemmini-default \
