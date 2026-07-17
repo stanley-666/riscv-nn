@@ -6,6 +6,90 @@ This document defines their numerical behavior so that API users can reproduce
 validation results and distinguish expected approximation error from an
 implementation defect.
 
+## Mathematical definitions
+
+`ActivationType` declares `RELU`, `SIGMOID`, `TANH`, `LEAKY_RELU`, `SOFTMAX`,
+`GELU`, and `NONE`. Their reference definitions are listed below. Unless noted
+otherwise, each function is applied independently to every tensor element.
+
+### NONE (identity)
+
+$$
+f(x) = x.
+$$
+
+### ReLU
+
+$$
+\operatorname{ReLU}(x) = \max(0,x)
+=
+\begin{cases}
+x, & x > 0,\\
+0, & x \le 0.
+\end{cases}
+$$
+
+### Leaky ReLU
+
+This project fixes the negative slope at $\alpha=0.01$:
+
+$$
+\operatorname{LeakyReLU}(x) =
+\begin{cases}
+x, & x > 0,\\
+0.01x, & x \le 0.
+\end{cases}
+$$
+
+### Sigmoid
+
+$$
+\sigma(x) = \frac{1}{1+e^{-x}}.
+$$
+
+The useful symmetry relation is
+
+$$
+\sigma(-x)=1-\sigma(x).
+$$
+
+### Tanh
+
+$$
+\tanh(x)=\frac{e^x-e^{-x}}{e^x+e^{-x}}.
+$$
+
+The current FP32 RVV chunk path evaluates this definition through the scalar
+`tanhf` fallback.
+
+### GELU
+
+This project uses the exact error-function form rather than the common tanh
+approximation:
+
+$$
+\operatorname{GELU}(x)
+=\frac{x}{2}\left(1+\operatorname{erf}\left(\frac{x}{\sqrt{2}}\right)\right).
+$$
+
+In the implementation, $1/\sqrt{2}$ is represented by
+`0.70710678118654752f` and evaluated with `erff`.
+
+### Softmax
+
+For a vector $x=(x_0,\ldots,x_{L-1})$, Softmax is
+
+$$
+\operatorname{softmax}(x)_i
+=\frac{e^{x_i-m}}{\sum_{j=0}^{L-1}e^{x_j-m}},
+\qquad
+m=\max_j x_j.
+$$
+
+Subtracting $m$ does not change the result and prevents exponential overflow.
+Unlike the other activations, Softmax depends on the complete tensor rather
+than one element or one RVV chunk.
+
 ## Operator status
 
 | Activation | FP32 RVV implementation | INT8 implementation | Notes |
@@ -37,6 +121,43 @@ sigmoid(-x) = 1 - sigmoid(x).
 The absolute input is clamped to 8 before polynomial evaluation. Therefore,
 values outside `[-8, 8]` intentionally saturate to the approximation at the
 interval boundary instead of approaching exact mathematical zero or one.
+
+More precisely, let
+
+$$
+a=\min(|x|,8).
+$$
+
+The implemented polynomial is
+
+$$
+\begin{aligned}
+P(a)={}&
+  7.12672489733\times10^{-8}a^9
+- 2.22844320788\times10^{-6}a^8\\
+&+2.36792598722\times10^{-5}a^7
+-3.77314366681\times10^{-5}a^6\\
+&-1.26097319782\times10^{-3}a^5
++1.13415961144\times10^{-2}a^4\\
+&-3.77522656294\times10^{-2}a^3
++1.21156497548\times10^{-2}a^2\\
+&+2.46437157045\times10^{-1}a
++5.0\times10^{-1}.
+\end{aligned}
+$$
+
+The RVV approximation is therefore
+
+$$
+\widehat{\sigma}(x)=
+\begin{cases}
+P(a), & x\ge 0,\\
+1-P(a), & x<0.
+\end{cases}
+$$
+
+The source evaluates $P$ in Horner form, from the $a^9$ coefficient down to
+the constant term, using nine vector fused multiply-add operations.
 
 Implementation properties:
 
@@ -92,6 +213,41 @@ The exponential approximation is a degree-9 polynomial fitted on `[-8, 0]`.
 After maximum subtraction, values less than `-8` are treated as zero. The
 offline maximum absolute exponential error on the fitted interval is
 `5.1e-5`.
+
+For $z=x_i-m$, define the implemented exponential approximation as
+
+$$
+\widehat{e}(z)=
+\begin{cases}
+0, & z < -8,\\
+Q(z), & -8\le z\le0,
+\end{cases}
+$$
+
+where
+
+$$
+\begin{aligned}
+Q(z)={}&
+  7.34296678655\times10^{-8}z^9
++3.33000829946\times10^{-6}z^8\\
+&+6.75309983314\times10^{-5}z^7
++8.15969107345\times10^{-4}z^6\\
+&+6.61416671412\times10^{-3}z^5
++3.83016441475\times10^{-2}z^4\\
+&+1.62659689007\times10^{-1}z^3
++4.97413169516\times10^{-1}z^2\\
+&+9.99274150832\times10^{-1}z
++9.99949462408\times10^{-1}.
+\end{aligned}
+$$
+
+The resulting RVV Softmax is
+
+$$
+\widehat{s}_i=
+\frac{\widehat{e}(x_i-m)}{\sum_j\widehat{e}(x_j-m)}.
+$$
 
 Spike validation of the four-class gesture model produced:
 

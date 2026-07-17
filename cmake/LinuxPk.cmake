@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 set(NN_LINUX_TESTBENCHES
-  gesture_recognition_fp32 kyber_nouv_rvv resnet50
+  fft gesture_recognition_fp32 kyber_nouv_rvv resnet50
   sentence_inference_fp32 sentence_inference_int8 sentence_gemmini)
 if(NOT NN_TESTBENCH IN_LIST NN_LINUX_TESTBENCHES)
   message(FATAL_ERROR
@@ -10,6 +10,9 @@ if(NOT NN_TESTBENCH IN_LIST NN_LINUX_TESTBENCHES)
 endif()
 if(NOT NN_LINK_MODE MATCHES "^(static|dynamic)$")
   message(FATAL_ERROR "NN_LINK_MODE must be static or dynamic")
+endif()
+if(NN_TESTBENCH STREQUAL "fft" AND NN_BACKEND STREQUAL "cpu")
+  message(FATAL_ERROR "The fft testbench uses explicit RVV intrinsics; select vector or all")
 endif()
 if(NN_BACKEND STREQUAL "cpu" AND NOT NN_CONFIG STREQUAL "default")
   message(STATUS "CPU backend uses '${NN_CONFIG}'; auto-vectorization remains disabled")
