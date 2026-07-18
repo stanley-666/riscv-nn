@@ -1,3 +1,18 @@
+## Build commands
+
+From the repository root, build the Linux/Spike CPU and RVV targets with:
+
+```sh
+./scripts/configure_build.sh linux-pk cpu gesture_recognition_fp32 default
+./scripts/configure_build.sh linux-pk vector gesture_recognition_fp32 zvl128b
+```
+
+Build the bare-metal RVV target with:
+
+```sh
+./scripts/configure_build.sh baremetal vector gesture_model V128D128B
+```
+
 ## Spike Performance
 
 * spike `default CPU clock = 1GHz`
