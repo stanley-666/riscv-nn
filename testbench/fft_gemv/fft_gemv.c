@@ -99,7 +99,7 @@ static void dft_gemv_rvv_f32(void)
     }
 }
 
-int main(void)
+int fft_gemv_testbench_run(void)
 {
     uint64_t generation_start = read_cycles();
     generate_twiddle_matrix();
@@ -162,3 +162,10 @@ int main(void)
     printf("DFT GEMV RVV: PASS (atol %.6f, rtol %.6f)\n", FFT_ATOL, FFT_RTOL);
     return 0;
 }
+
+#ifndef BAREMETAL
+int main(void)
+{
+    return fft_gemv_testbench_run();
+}
+#endif

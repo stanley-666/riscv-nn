@@ -102,9 +102,13 @@ elseif(NN_TESTBENCH STREQUAL "fft")
   set(NN_APP_DIR baremetal/apps/fft)
   set(NN_MODEL_DIR testbench/fft)
   set(NN_APP_EXTRA_SOURCE testbench/fft/fft.c)
+elseif(NN_TESTBENCH STREQUAL "fft_gemv")
+  set(NN_APP_DIR baremetal/apps/fft_gemv)
+  set(NN_MODEL_DIR testbench/fft_gemv)
+  set(NN_APP_EXTRA_SOURCE testbench/fft_gemv/fft_gemv.c)
 else()
   message(FATAL_ERROR
-    "Unsupported bare-metal NN_TESTBENCH='${NN_TESTBENCH}'. Supported: sentence_inference_fp32;sentence_inference_int8;gesture_model;kyber;fft")
+    "Unsupported bare-metal NN_TESTBENCH='${NN_TESTBENCH}'. Supported: sentence_inference_fp32;sentence_inference_int8;gesture_model;kyber;fft;fft_gemv")
 endif()
 
 file(GLOB NN_APP_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${NN_APP_DIR}/*.c")
@@ -119,9 +123,20 @@ set(NN_BAREMETAL_SOURCES
   baremetal/trap.c
   baremetal/start.S)
 
+set(NN_BAREMETAL_STANDALONE_TESTBENCHES fft fft_gemv)
+if(NN_TESTBENCH IN_LIST NN_BAREMETAL_STANDALONE_TESTBENCHES)
+  set_target_properties(riscv_nn_ops PROPERTIES EXCLUDE_FROM_ALL TRUE)
+  list(REMOVE_ITEM NN_BAREMETAL_SOURCES baremetal/nn_runtime_baremetal.c)
+endif()
+
 set(NN_BAREMETAL_BASENAME "${NN_HARDWARE_CONFIG}_nn_rvv_baremetal")
 set(NN_BAREMETAL_OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/baremetal/${NN_TESTBENCH}")
-add_executable(${NN_TESTBENCH}_baremetal ${NN_BAREMETAL_SOURCES} $<TARGET_OBJECTS:riscv_nn_ops>)
+if(NN_TESTBENCH IN_LIST NN_BAREMETAL_STANDALONE_TESTBENCHES)
+  add_executable(${NN_TESTBENCH}_baremetal ${NN_BAREMETAL_SOURCES})
+else()
+  add_executable(${NN_TESTBENCH}_baremetal
+    ${NN_BAREMETAL_SOURCES} $<TARGET_OBJECTS:riscv_nn_ops>)
+endif()
 target_include_directories(${NN_TESTBENCH}_baremetal PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/header"
   "${CMAKE_CURRENT_SOURCE_DIR}/csrc"

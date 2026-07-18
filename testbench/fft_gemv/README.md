@@ -29,6 +29,16 @@ spike --isa=rv64gcv_zicntr_zihpm_zvbb_zvl128b_zve64d \
     pk build/linux-pk/fft_gemv/zvl128b/vector/static/fft_gemv
 ```
 
+Build the bare-metal RVV image with:
+
+```sh
+./scripts/configure_build.sh baremetal vector fft_gemv V128D128B
+```
+
+The generated ELF, binary, and map are placed under
+`build/baremetal/fft_gemv/`. The 1024x1024 original and reordered complex
+twiddle matrices occupy about 16 MiB of BSS in external RAM.
+
 The output separately reports twiddle-generation, memory-reorder, GEMV-kernel,
 and end-to-end cycles. Validation and bin printing are outside all measurements.
 

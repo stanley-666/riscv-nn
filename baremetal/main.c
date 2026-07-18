@@ -31,16 +31,14 @@ static inline uint64_t read_misa(void) {
     return misa;
 }
 
-static inline void enable_rvv_context(void) {
+static inline bool rvv_context_initialized(void) {
 #if defined(__riscv_vector)
     uint64_t mstatus;
     __asm__ volatile("csrr %0, mstatus" : "=r"(mstatus));
-    const uint64_t VS_DIRTY = (uint64_t)3 << 9;
-    if ((mstatus & VS_DIRTY) != VS_DIRTY) {
-        mstatus |= VS_DIRTY;
-        __asm__ volatile("csrw mstatus, %0" :: "r"(mstatus));
-    }
-    __asm__ volatile("vsetvli zero, zero, e8, m1, ta, ma");
+    const uint64_t VS_MASK = (uint64_t)3 << 9;
+    return (mstatus & VS_MASK) != 0;
+#else
+    return false;
 #endif
 }
 
@@ -127,8 +125,11 @@ int main(void) {
     printf("Selected task: %s\n", task->name ? task->name : "(unnamed)");
 
     if (rvv_available && ENABLE_VECTOR) {
-        enable_rvv_context();
-        printf("RVV context enabled.\n");
+        if (!rvv_context_initialized()) {
+            printf("RVV context was not initialized by startup.\n");
+            return 1;
+        }
+        printf("RVV context initialized by startup.\n");
         log_vlen_once();
         run_rvv_path(task);
     } else {

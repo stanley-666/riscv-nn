@@ -20,8 +20,12 @@ else ifeq ($(TESTBENCH),fft)
   DEFAULT_APP_DIR        := $(CURDIR)/apps/fft
   DEFAULT_MODEL_DATA_DIR := $(ROOT_DIR)/testbench/fft
   DEFAULT_APP_EXTRA_SRCS := $(ROOT_DIR)/testbench/fft/fft.c
+else ifeq ($(TESTBENCH),fft_gemv)
+  DEFAULT_APP_DIR        := $(CURDIR)/apps/fft_gemv
+  DEFAULT_MODEL_DATA_DIR := $(ROOT_DIR)/testbench/fft_gemv
+  DEFAULT_APP_EXTRA_SRCS := $(ROOT_DIR)/testbench/fft_gemv/fft_gemv.c
 else
-  $(error No bare-metal adapter for TESTBENCH='$(TESTBENCH)'. Supported: sentence_inference_fp32 sentence_inference_int8 gesture_model kyber fft)
+  $(error No bare-metal adapter for TESTBENCH='$(TESTBENCH)'. Supported: sentence_inference_fp32 sentence_inference_int8 gesture_model kyber fft fft_gemv)
 endif
 
 APP_DIR          ?= $(DEFAULT_APP_DIR)
