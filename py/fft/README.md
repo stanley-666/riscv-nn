@@ -69,7 +69,8 @@ python3 py/fft/fft_groundtruth.py --size 1024 \
 ```
 
 Regenerate this header with another power-of-two `--size`, then rebuild the C
-testbench to validate a different FFT length.
+testbench to validate a different FFT length. All four generated static arrays
+use `__attribute__((aligned(64)))` so their base addresses are 64-byte aligned.
 
 Save the input and ground-truth arrays for another implementation to consume:
 

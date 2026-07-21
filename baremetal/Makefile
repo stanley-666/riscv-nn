@@ -24,8 +24,16 @@ else ifeq ($(TESTBENCH),fft_gemv)
   DEFAULT_APP_DIR        := $(CURDIR)/apps/fft_gemv
   DEFAULT_MODEL_DATA_DIR := $(ROOT_DIR)/testbench/fft_gemv
   DEFAULT_APP_EXTRA_SRCS := $(ROOT_DIR)/testbench/fft_gemv/fft_gemv.c
+else ifeq ($(TESTBENCH),fft_batched)
+  DEFAULT_APP_DIR        := $(CURDIR)/apps/fft_batched
+  DEFAULT_MODEL_DATA_DIR := $(ROOT_DIR)/testbench/fft_batched
+  DEFAULT_APP_EXTRA_SRCS := $(ROOT_DIR)/testbench/fft_batched/fft_batched.c
+else ifeq ($(TESTBENCH),fft_cpu)
+  DEFAULT_APP_DIR        := $(CURDIR)/apps/fft_cpu
+  DEFAULT_MODEL_DATA_DIR := $(ROOT_DIR)/testbench/fft_cpu
+  DEFAULT_APP_EXTRA_SRCS := $(ROOT_DIR)/testbench/fft_cpu/fft_cpu.c
 else
-  $(error No bare-metal adapter for TESTBENCH='$(TESTBENCH)'. Supported: sentence_inference_fp32 sentence_inference_int8 gesture_model kyber fft fft_gemv)
+  $(error No bare-metal adapter for TESTBENCH='$(TESTBENCH)'. Supported: sentence_inference_fp32 sentence_inference_int8 gesture_model kyber fft fft_batched fft_cpu fft_gemv)
 endif
 
 APP_DIR          ?= $(DEFAULT_APP_DIR)

@@ -4,7 +4,7 @@
 
 #define FFT_SIZE 1024
 
-static const float input_real[FFT_SIZE] = {
+static const float input_real[FFT_SIZE] __attribute__((aligned(64))) = {
     0.273923367f, -0.460426569f, -0.918052971f, -0.966944754f,
     0.626540482f, 0.825511158f, 0.213271558f, 0.458993107f,
     0.087249979f, 0.870144844f, 0.631707132f, -0.994522989f,
@@ -263,7 +263,7 @@ static const float input_real[FFT_SIZE] = {
     0.451508075f, 0.126407996f, -0.859220564f, 0.683754504f,
 };
 
-static const float input_imag[FFT_SIZE] = {
+static const float input_imag[FFT_SIZE] __attribute__((aligned(64))) = {
     -0.163941994f, -0.215064347f, -0.729381502f, -0.773560226f,
     0.044491865f, 0.137487173f, 0.037371084f, 0.226249352f,
     0.755286932f, 0.008409690f, -0.241704643f, -0.486854583f,
@@ -522,7 +522,7 @@ static const float input_imag[FFT_SIZE] = {
     -0.246323436f, -0.921150506f, -0.567759037f, -0.043174546f,
 };
 
-static const float groundtruth_real[FFT_SIZE] = {
+static const float groundtruth_real[FFT_SIZE] __attribute__((aligned(64))) = {
     29.847013474f, 25.739467621f, -1.023664713f, 4.825605392f,
     -9.944909096f, -29.115413666f, 17.160648346f, -3.878823042f,
     -15.766901016f, 7.930117130f, 10.809679031f, -24.521348953f,
@@ -781,7 +781,7 @@ static const float groundtruth_real[FFT_SIZE] = {
     6.643838406f, -24.563451767f, -18.962635040f, -7.726731300f,
 };
 
-static const float groundtruth_imag[FFT_SIZE] = {
+static const float groundtruth_imag[FFT_SIZE] __attribute__((aligned(64))) = {
     -39.334899902f, -43.568534851f, 14.801961899f, -2.925148726f,
     -18.735580444f, -23.117616653f, -0.924396813f, 7.731388092f,
     15.894763947f, 8.579004288f, -26.391370773f, 17.785831451f,

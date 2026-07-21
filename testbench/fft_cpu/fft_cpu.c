@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Scalar radix-2 FFT using the same vectors and tolerances as the RVV test. */
 
+#define _DEFAULT_SOURCE
+
 #include <math.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -11,7 +13,6 @@
 
 #define FFT_ATOL 5.0e-5f
 #define FFT_RTOL 1.0e-6f
-#define FFT_PI 3.14159265358979323846f
 
 static uint64_t read_cycles(void)
 {
@@ -57,7 +58,7 @@ static void fft_cpu_f32(float *real, float *imag, size_t size)
         size_t half = block_size >> 1;
         for (size_t block = 0; block < size; block += block_size) {
             for (size_t offset = 0; offset < half; ++offset) {
-                float angle = -2.0f * FFT_PI * (float)offset / (float)block_size;
+                float angle = -2.0f * (float)M_PI * (float)offset / (float)block_size;
                 float wr = cosf(angle);
                 float wi = sinf(angle);
                 size_t even = block + offset;
@@ -91,7 +92,7 @@ static void print_u64_decimal(uint64_t value)
     }
 }
 
-int main(void)
+int fft_cpu_testbench_run(void)
 {
     float actual_real[FFT_SIZE];
     float actual_imag[FFT_SIZE];
@@ -145,3 +146,10 @@ int main(void)
     printf("FFT CPU: PASS (atol %.6f, rtol %.6f)\n", FFT_ATOL, FFT_RTOL);
     return 0;
 }
+
+#ifndef BAREMETAL
+int main(void)
+{
+    return fft_cpu_testbench_run();
+}
+#endif

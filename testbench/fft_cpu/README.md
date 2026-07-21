@@ -41,3 +41,20 @@ ratio `0.385719` at bin 1015.
 | Spike simulation | `default` RV64GC scalar CPU | 576,027 | PASS |
 
 This is a single reported run rather than an average over repeated trials.
+
+### Genesys2 FPGA configuration matrix
+
+The following hardware configurations are planned for testing. A dash means
+that no result has been recorded yet.
+
+| Configuration | Cycles | Max component error | Max tolerance ratio | Result |
+| --- | ---: | ---: | ---: | --- |
+| `GENV128D64` | — | — | — | Pending |
+| `GENV128D128` | — | — | — | Pending |
+| `GENV256D64` | — | — | — | Pending |
+| `GENV256D128` | — | — | — | Pending |
+| `GENV512D64` | — | — | — | Pending |
+| `GENV512D128` | — | — | — | Pending |
+| `LGVV128D128` | — | — | — | Pending |
+| `LGVV256D128` | — | — | — | Pending |
+| `LGVV512D128` | — | — | — | Pending |

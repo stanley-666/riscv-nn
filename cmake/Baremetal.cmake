@@ -106,9 +106,17 @@ elseif(NN_TESTBENCH STREQUAL "fft_gemv")
   set(NN_APP_DIR baremetal/apps/fft_gemv)
   set(NN_MODEL_DIR testbench/fft_gemv)
   set(NN_APP_EXTRA_SOURCE testbench/fft_gemv/fft_gemv.c)
+elseif(NN_TESTBENCH STREQUAL "fft_batched")
+  set(NN_APP_DIR baremetal/apps/fft_batched)
+  set(NN_MODEL_DIR testbench/fft_batched)
+  set(NN_APP_EXTRA_SOURCE testbench/fft_batched/fft_batched.c)
+elseif(NN_TESTBENCH STREQUAL "fft_cpu")
+  set(NN_APP_DIR baremetal/apps/fft_cpu)
+  set(NN_MODEL_DIR testbench/fft_cpu)
+  set(NN_APP_EXTRA_SOURCE testbench/fft_cpu/fft_cpu.c)
 else()
   message(FATAL_ERROR
-    "Unsupported bare-metal NN_TESTBENCH='${NN_TESTBENCH}'. Supported: sentence_inference_fp32;sentence_inference_int8;gesture_model;kyber;fft;fft_gemv")
+    "Unsupported bare-metal NN_TESTBENCH='${NN_TESTBENCH}'. Supported: sentence_inference_fp32;sentence_inference_int8;gesture_model;kyber;fft;fft_batched;fft_cpu;fft_gemv")
 endif()
 
 file(GLOB NN_APP_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${NN_APP_DIR}/*.c")
@@ -123,7 +131,7 @@ set(NN_BAREMETAL_SOURCES
   baremetal/trap.c
   baremetal/start.S)
 
-set(NN_BAREMETAL_STANDALONE_TESTBENCHES fft fft_gemv)
+set(NN_BAREMETAL_STANDALONE_TESTBENCHES fft fft_batched fft_cpu fft_gemv)
 if(NN_TESTBENCH IN_LIST NN_BAREMETAL_STANDALONE_TESTBENCHES)
   set_target_properties(riscv_nn_ops PROPERTIES EXCLUDE_FROM_ALL TRUE)
   list(REMOVE_ITEM NN_BAREMETAL_SOURCES baremetal/nn_runtime_baremetal.c)

@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Complex DFT expressed as Conv1D-style scalar-vector GEMV MACs. */
 
+#define _DEFAULT_SOURCE
+
 #include <math.h>
 #include <riscv_vector.h>
 #include <stddef.h>
@@ -11,17 +13,20 @@
 
 #define FFT_ATOL 2.0e-4f
 #define FFT_RTOL 1.0e-6f
-#define FFT_PI 3.14159265358979323846
 
 /* Natural DFT layout: [output bin][input sample]. */
-static float twiddle_real_original[FFT_SIZE][FFT_SIZE];
-static float twiddle_imag_original[FFT_SIZE][FFT_SIZE];
+static float twiddle_real_original[FFT_SIZE][FFT_SIZE]
+    __attribute__((aligned(64)));
+static float twiddle_imag_original[FFT_SIZE][FFT_SIZE]
+    __attribute__((aligned(64)));
 
 /* Conv1D/GEMV layout: [scalar input][contiguous output weights]. */
-static float twiddle_real_rvv[FFT_SIZE][FFT_SIZE];
-static float twiddle_imag_rvv[FFT_SIZE][FFT_SIZE];
-static float actual_real[FFT_SIZE];
-static float actual_imag[FFT_SIZE];
+static float twiddle_real_rvv[FFT_SIZE][FFT_SIZE]
+    __attribute__((aligned(64)));
+static float twiddle_imag_rvv[FFT_SIZE][FFT_SIZE]
+    __attribute__((aligned(64)));
+static float actual_real[FFT_SIZE] __attribute__((aligned(64)));
+static float actual_imag[FFT_SIZE] __attribute__((aligned(64)));
 
 static uint64_t read_cycles(void)
 {
@@ -47,7 +52,7 @@ static void generate_twiddle_matrix(void)
 {
     for (size_t output_bin = 0; output_bin < FFT_SIZE; ++output_bin) {
         for (size_t input_index = 0; input_index < FFT_SIZE; ++input_index) {
-            double angle = -2.0 * FFT_PI * (double)output_bin
+            double angle = -2.0 * M_PI * (double)output_bin
                 * (double)input_index / (double)FFT_SIZE;
             twiddle_real_original[output_bin][input_index] = (float)cos(angle);
             twiddle_imag_original[output_bin][input_index] = (float)sin(angle);

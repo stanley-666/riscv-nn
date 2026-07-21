@@ -5,6 +5,9 @@ scalar-vector MAC operations. The original input arrays remain unchanged. Each
 scalar input sample multiplies contiguous vectors of twiddle weights and
 accumulates output frequency bins with `vfmacc.vf` and `vfnmsac.vf`.
 
+All static input, ground-truth, twiddle, and output arrays are explicitly
+aligned to 64-byte boundaries.
+
 The natural twiddle layout `[output_bin][input_index]` is transposed in a
 measured preprocessing step into `[input_index][output_bin]`, matching the
 `(input channel, output channel)` weight layout used by the RVV Conv1D kernel.
@@ -55,3 +58,20 @@ tolerance ratio `0.621375` at bin 297.
 The total includes runtime construction of the full 1024x1024 complex twiddle
 matrix. Validation and bin printing are excluded. These values are from one run
 rather than an average.
+
+### Genesys2 FPGA configuration matrix
+
+The following hardware configurations are planned for testing. A dash means
+that no result has been recorded yet.
+
+| Configuration | Twiddle generation cycles | Memory reorder cycles | GEMV cycles | Total cycles | Max component error | Max tolerance ratio | Result |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `GENV128D64` | — | — | — | — | — | — | Pending |
+| `GENV128D128` | — | — | — | — | — | — | Pending |
+| `GENV256D64` | — | — | — | — | — | — | Pending |
+| `GENV256D128` | — | — | — | — | — | — | Pending |
+| `GENV512D64` | — | — | — | — | — | — | Pending |
+| `GENV512D128` | — | — | — | — | — | — | Pending |
+| `LGVV128D128` | — | — | — | — | — | — | Pending |
+| `LGVV256D128` | — | — | — | — | — | — | Pending |
+| `LGVV512D128` | — | — | — | — | — | — | Pending |

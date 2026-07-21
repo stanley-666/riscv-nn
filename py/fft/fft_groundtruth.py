@@ -62,7 +62,9 @@ def print_float_array(name: str, values: np.ndarray) -> None:
 
 
 def format_c_array(name: str, values: np.ndarray) -> list[str]:
-    lines = [f"static const float {name}[FFT_SIZE] = {{"]
+    lines = [
+        f"static const float {name}[FFT_SIZE] __attribute__((aligned(64))) = {{"
+    ]
     for offset in range(0, values.size, 4):
         chunk = values[offset : offset + 4]
         values_text = ", ".join(f"{float(value):.9f}f" for value in chunk)
