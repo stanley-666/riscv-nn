@@ -3,6 +3,72 @@
 This testbench runs 64 independent 1024-point FP32 radix-2 FFTs. Every batch
 uses the same input and NumPy ground truth as `testbench/fft`.
 
+## FFT dataflow
+
+The following 8-point radix-2 DIT example shows the same dataflow used by the
+1024-point implementation. Input samples are first placed in bit-reversed
+order, then processed by $\log_2(8)=3$ butterfly stages. In the batched RVV
+implementation, each horizontal wire represents the same FFT bin across all 64
+batches, so every butterfly operates on contiguous batch vectors. Red `x`
+nodes multiply the lower butterfly input by the labeled twiddle factor, green
+`+` nodes form the upper output, and orange `-` nodes form the lower output.
+Each purple `B` at a pair of crossing paths marks one complete radix-2
+butterfly. The expanded butterfly inset defines $a$ as its upper complex input,
+$b$ as its lower complex input, and $t$ as the twiddle-rotated lower input.
+
+For FFT stage $s$, let the block size be $m=2^{s+1}$, the half-block size be
+$h=m/2$, the block start be $q$, and the offset inside the half-block be
+$k\in[0,h-1]$. If $v_s[n]$ denotes the complex value entering stage $s$, then
+
+$$
+\begin{aligned}
+a &= v_s[q+k],
+&&\text{the upper input of the butterfly}, \\
+b &= v_s[q+k+h],
+&&\text{the lower input of the butterfly}.
+\end{aligned}
+$$
+
+Thus, $a$ and $b$ are the two complex values separated by $h$ positions within
+the same FFT block. They are not constants. For the 8-point diagram,
+$v_0=[x_0,x_4,x_2,x_6,x_1,x_5,x_3,x_7]$ is the bit-reversed input and $v_3$
+contains the natural-order FFT outputs $[X_0,\ldots,X_7]$.
+
+The stage-local twiddle factor is
+
+$$
+W_m^k = e^{-j 2\pi k/m}.
+$$
+
+The diagram expresses every stage using an equivalent power of $W_8$:
+$W_m^k=W_8^{8k/m}$.
+
+One butterfly computes
+
+$$
+\begin{aligned}
+t &= W_m^k b,
+&&\text{the twiddle-rotated lower input}, \\
+v_{s+1}[q+k] &= a+t,
+&&\text{the upper output}, \\
+v_{s+1}[q+k+h] &= a-t,
+&&\text{the lower output}.
+\end{aligned}
+$$
+
+In the batched RVV implementation, each scalar-looking symbol is a vector
+across the batch dimension:
+
+$$
+\mathbf{a}=[a^{(0)},a^{(1)},\ldots,a^{(63)}],\qquad
+\mathbf{b}=[b^{(0)},b^{(1)},\ldots,b^{(63)}],\qquad
+\mathbf{t}=W_m^k\mathbf{b}.
+$$
+
+The twiddle $W_m^k$ is shared by all 64 batches in that butterfly.
+
+![8-point radix-2 DIT FFT dataflow](fft_8point_dataflow.svg)
+
 The batch-major input `[batch][bin]` is transposed in a measured preprocessing
 step into `[bin][batch]`. Each radix-2 butterfly uses scalar real/imaginary
 twiddle factors and LMUL=m8 vectors spanning independent batches. The
@@ -15,22 +81,29 @@ instructions.
 
 The stage loop computes each `(stage, offset)` twiddle only once and reuses it
 across all blocks. The `offset == 0` case uses `butterfly_unity_rvv_f32()`,
-which replaces multiplication by `1 + 0j` with vector add/sub operations.
+which replaces multiplication by $1+0j$ with vector add/sub operations.
 
 The input and working arrays are explicitly aligned to 64-byte boundaries.
 Memory reordering is measured separately from FFT execution.
 
 Before entering the measured regions, the testbench rejects NaN/Inf inputs and
 checks the conservative FP32 component bound
-`FFT_SIZE * max(abs(real) + abs(imag)) <= FLT_MAX`. Each output-bin
-strip-mined loop also rejects a zero VL or a VL larger than the remaining bin
-count. Validation
-counts NaN/Inf outputs explicitly, so non-finite arithmetic cannot silently
+
+$$
+N\max_n\left(\lvert x_{\mathrm{real}}[n]\rvert
+             +\lvert x_{\mathrm{imag}}[n]\rvert\right)
+\leq \mathrm{FLT\_MAX}, \qquad N=\mathrm{FFT\_SIZE}.
+$$
+
+Each output-bin strip-mined loop also rejects a zero VL or a VL larger than the
+remaining bin count. Validation counts NaN/Inf outputs explicitly, so
+non-finite arithmetic cannot silently
 bypass the normal tolerance comparisons. These checks distinguish arithmetic
 overflow and invalid VL behavior from finite-but-incorrect hardware results.
-Every one of the `64 * 1024` complex outputs is checked. For a point outside
-the configured absolute/relative tolerance, the diagnostic includes its batch
-and bin indices, actual and expected complex values, and component errors. To
+Every one of the $64\times1024=65{,}536$ complex outputs is checked. For a
+point outside the configured absolute/relative tolerance, the diagnostic
+includes its batch and bin indices, actual and expected complex values, and
+component errors. To
 keep a failing bare-metal run usable over UART, at most the first 64 mismatches
 are printed, followed by the total mismatch count and a mismatch count for each
 failing batch. Successful batch-0 bins are not dumped, keeping the final
@@ -45,124 +118,130 @@ spike --isa=rv64gcv_zicntr_zihpm_zvbb_zvl128b_zve64d \
     pk build/linux-pk/fft_batched/zvl128b/vector/static/fft_batched
 ```
 
+Build the bare-metal RVV image:
+
+```sh
+make baremetal \
+    TESTBENCH=fft_batched \
+    BACKEND=vector \
+    HARDWARE_CONFIG=V128D128B
+```
+
+Flash it to an SD card:
+
+```sh
+lsblk
+
+make baremetal-flash \
+    TESTBENCH=fft_batched \
+    BACKEND=vector \
+    HARDWARE_CONFIG=V128D128B \
+    SDCARD_DEVICE=/dev/sdX \
+    FLASH_CONFIRM=YES
+```
+
+Replace `/dev/sdX` with the whole, unmounted SD-card device. The flash target
+rejects partitions and mounted devices, then writes the binary beginning at
+512-byte block 34. This operation overwrites data on the selected device.
+
 ## Performance results
 
 The recorded results below use the earlier LMUL=m4 butterfly kernel. New
 LMUL=m8 measurements should be recorded separately rather than compared as if
 they came from the current binary.
 
-The result below is a single Spike run with 64 identical 1024-point FP32 FFTs.
-All batches passed with maximum component error `0.000024` at batch 0 bin 757
-and maximum tolerance ratio `0.385719` at batch 0 bin 1015.
+Each row below is a single Spike run with 64 identical 1024-point FP32 FFTs.
+The two earlier m4 runs passed with maximum component error `0.000024` at
+batch 0 bin 757 and maximum tolerance ratio `0.385719` at batch 0 bin 1015.
 
 | Environment | Configuration | Batches | Memory reorder cycles | FFT cycles | Total cycles | FFT cycles/FFT | Total cycles/FFT | Result |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | Spike simulation | `zvl128b`, LMUL=m4 | 64 | 827,078 | 1,104,678 | 1,931,756 | 17,260 | 30,183 | PASS |
 | Spike simulation | `zvl512b`, LMUL=m4 | 64 | 827,078 | 608,994 | 1,436,072 | 9,515 | 22,438 | PASS |
+| Spike simulation | `zvl128b`, LMUL=m8 | 64 | 827,076 | 665,325 | 1,492,401 | 10,395 | 23,318 | PASS |
+
+The `zvl128b`, LMUL=m8 run used the current kernel and passed all 65,536
+complex points with zero non-finite outputs. Its maximum component error was
+`0.000026` and maximum tolerance ratio was `0.461186`, both at batch 0,
+bin 1015.
 
 Input initialization, validation, and bin printing are outside the measured
 regions. These values are from one run rather than an average.
 
 ### Genesys2 FPGA configuration matrix
 
-The following nine Genesys2 FPGA configurations are included in the hardware
-test matrix. A dash means that no result has been recorded yet.
-
-| Configuration | Batches | Memory reorder cycles | FFT cycles | Total cycles | FFT cycles/FFT | Total cycles/FFT | Max component error | Max tolerance ratio | Result |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| `GENV128D64` | 64 | 3,263,008 | 2,828,306 | 6,091,314 | 44,192 | 95,176 | 29.644190 | 585,500.875000 | FAIL |
-| `GENV128D128` | 64 | 3,214,137 | 2,330,342 | 5,544,479 | 36,411 | 86,632 | 30.909445 | 609,266.875000 | FAIL |
-| `GENV256D64` | 64 | 3,261,749 | 2,550,859 | 5,812,608 | 39,857 | 90,822 | 39.438728 | 737,125.500000 | FAIL |
-| `GENV256D128` | 64 | 3,214,248 | 1,926,725 | 5,140,973 | 30,105 | 80,327 | 31.713062 | 526,786.562500 | FAIL |
-| `GENV512D64` | 64 | 3,264,190 | 2,314,376 | 5,578,566 | 36,162 | 87,165 | 47.745102 | 943,011.062500 | FAIL |
-| `GENV512D128` | 64 | 3,214,264 | 1,661,031 | 4,875,295 | 25,953 | 76,176 | 39.449802 | 759,238.500000 | FAIL |
-| `LGVV128D128` | 64 | 3,214,396 | 2,155,732 | 5,370,128 | 33,683 | 83,908 | 31.002779 | 513,741.343750 | FAIL |
-| `LGVV256D128` | 64 | 3,212,166 | 1,749,850 | 4,962,016 | 27,341 | 77,531 | 29.497887 | 577,860.687500 | FAIL |
-| `LGVV512D128` | 64 | 3,218,389 | 1,336,818 | 4,555,207 | 20,887 | 71,175 | 39.888527 | 566,915.125000 | FAIL |
-
-The `LGVV128D128` failure reported its maximum component error at batch 12,
-bin 459, and its maximum tolerance ratio at batch 12, bin 795. With FP32
-LMUL=m4 and VLEN=128, VLMAX is 16, so batch 12 is in the upper part of one
-vector.
-
-The `LGVV256D128` failure reported its maximum component error at batch 30,
-bin 459, and its maximum tolerance ratio at batch 30, bin 245. With FP32
-LMUL=m4 and VLEN=256, VLMAX is 32, so batch 30 is near the top of one vector.
-
-The `LGVV512D128` failure reported its maximum component error at batch 60,
-bin 638, and its maximum tolerance ratio at batch 40, bin 126. The tolerance
-was `atol=0.000050`, `rtol=0.000001`. The large error is not normal FP32
-rounding error and should be investigated before treating its cycle count as a
-validated performance result.
-
-The complete hardware log identifies this run as RV64 with FLEN=64 and
-VLEN=512:
-
-```text
-misa: 0x800000000034112d
-XLEN: 64
-FLEN: 64
-RVV: enabled and detected
-VLEN: 64 bytes (512 bits)
-```
-
-The displayed bins are taken from batch 0, and they agree with the NumPy
-ground truth to normal FP32 precision. For example, bin 0 was
-`29.847015-39.334896j`, versus ground truth
-`29.847013-39.334900j`. The validation failures occur in other batches:
-
-- Maximum component error: batch 60, bin 638.
-- Maximum normalized tolerance error: batch 40, bin 126.
-
-With FP32 LMUL=m4 and VLEN=512, one RVV operation covers all 64 batches at
-once. Batch indices 40 and 60 are therefore in the upper elements of that
-vector. A matching VLEN=512 Spike run passed with maximum component error
-`0.000024` and maximum tolerance ratio `0.385719`, both at batch 0. This rules
-out an algorithm-wide VLEN=512 indexing issue and ordinary FP32 overflow in the
-software path. All three LGVV results show the same upper-element pattern:
-batch 12 of 16 at VLEN128, batch 30 of 32 at VLEN256, and batches 40/60 of 64
-at VLEN512. The remaining evidence points to the FPGA implementation of the
-high-element or LMUL=m4 execution path rather than one specific VLEN.
-Restricting the requested VL and testing m1/m2/m4 separately can narrow the
-failing hardware condition.
-
-Additional point-by-point logs identify the configurations more precisely:
-
-- On `V128D64` (`VLEN=128`), batches 0--3 are correct while mismatches begin
-  at batch 4. Incorrect results repeat in pairs, for example batches 4/5,
-  6/7, and 8/9.
-- On `V512D128` (`VLEN=512`), batches 0--15 are correct while mismatches begin
-  at batch 16. Incorrect results repeat in groups of four, for example batches
-  16--19 and 20--23.
-
-In both cases, the number of initially correct FP32 elements is exactly
-`VLEN / 32`, the capacity of one LMUL=m1 vector register. The failing kernel
-requests LMUL=m4, so these observations indicate that the first physical
-register in the m4 group is handled correctly and the three additional
-registers are not. The repeated-result group sizes also match the respective
-64-bit and 128-bit datapath widths (two and four FP32 elements). This is
-evidence for an LMUL register-group/datapath lane-selection issue, not FFT
-overflow or insufficient external-memory capacity.
-
 The bit-reversal swap is currently restricted to `e32m1` strip mining as a
-hardware-isolation workaround. The butterfly arithmetic remains `e32m4`. This
-avoids the compiler-generated `e8,m1` plus 32-bit vector load/store sequence
-(effective EMUL=m4) while preserving the m4 arithmetic path under test.
+hardware-isolation workaround. The current butterfly arithmetic uses `e32m8`.
+This avoids the compiler-generated `e8,m1` plus 32-bit vector load/store
+sequence (effective EMUL=m4) while testing the arithmetic path at m8.
 
-With this workaround, the `V512D128` Genesys2 run passes all 65,536 complex
-points:
+With this workaround, the following Genesys2 runs pass all 65,536 complex
+points. These are single cold-cache runs, not warm-cache measurements or
+multi-run averages. The `LGVV512D128` row is from the build timestamped
+`20260722 114201`:
 
 | Configuration | Batches | Memory reorder cycles | FFT cycles | Total cycles | FFT cycles/FFT | Total cycles/FFT | Max component error | Max tolerance ratio | Mismatches | Result |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | `V512D128` (bit reversal `e32m1`, butterfly `e32m4`) | 64 | 3,190,883 | 1,373,879 | 4,564,762 | 21,466 | 71,324 | 0.000024 | 0.385719 | 0 / 65,536 | PASS |
+| `GENV128D64` (bit reversal `e32m1`, butterfly `e32m8`) | 64 | 3,241,677 | 2,196,989 | 5,438,666 | 34,327 | 84,979 | 0.000026 | 0.461186 | 0 / 65,536 | PASS |
+| `GENV128D128` (bit reversal `e32m1`, butterfly `e32m8`) | 64 | 3,191,320 | 1,458,026 | 4,649,346 | 22,781 | 72,646 | 0.000026 | 0.461186 | 0 / 65,536 | PASS |
+| `GENV256D64` (bit reversal `e32m1`, butterfly `e32m8`) | 64 | 3,242,023 | 2,004,708 | 5,246,731 | 31,323 | 81,980 | 0.000026 | 0.461186 | 0 / 65,536 | PASS |
+| `GENV256D128` (bit reversal `e32m1`, butterfly `e32m8`) | 64 | 3,195,854 | 1,256,358 | 4,452,212 | 19,630 | 69,565 | 0.000026 | 0.461186 | 0 / 65,536 | PASS |
+| `GENVV512D128` (bit reversal `e32m1`, butterfly `e32m8`) | 64 | 3,190,110 | 1,179,164 | 4,369,274 | 18,424 | 68,269 | 0.000026 | 0.461186 | 0 / 65,536 | PASS |
+| `LGVV128D128` (bit reversal `e32m1`, butterfly `e32m8`) | 64 | 3,192,459 | 1,422,060 | 4,614,519 | 22,219 | 72,101 | 0.000026 | 0.461186 | 0 / 65,536 | PASS |
+| `LGVV256D128` (bit reversal `e32m1`, butterfly `e32m8`) | 64 | 3,194,513 | 1,198,946 | 4,393,459 | 18,733 | 68,647 | 0.000026 | 0.461186 | 0 / 65,536 | PASS |
+| `LGVV512D128` (bit reversal `e32m1`, butterfly `e32m8`) | 64 | 3,192,232 | 1,119,913 | 4,312,145 | 17,498 | 67,377 | 0.000026 | 0.461186 | 0 / 65,536 | PASS |
 
-The passing m4 butterfly rules out a general LMUL=m4 floating-point pipeline
-failure. Together with the earlier failing binary, it isolates the FPGA issue
-to the compiler-generated vector-memory form with `vtype=e8,m1`, 32-bit element
-loads/stores, and effective EMUL=m4. That instruction sequence is legal RVV and
-passes on Spike, but it does not execute correctly on the tested FPGA design.
+### Speedup over scalar CPU
 
-The recorded `LGVV128D128` console output does not contain the newer
-`non-finite outputs:` diagnostic line, so it appears to have been produced by
-the binary from before explicit overflow detection was added. Reflashing the
-latest `fft_batched` binary is required to record that diagnostic.
+The speedup baseline is the 50 MHz Genesys2 scalar CPU cold-cache result from
+`testbench/fft_cpu`: 60,753,733 cycles for 64 FFTs, or 949,277 cycles per FFT.
+All compared CPU and RVV runs passed with zero mismatches out of 65,536 complex
+points. Kernel speedup excludes the RVV-only matrix reorder; end-to-end speedup
+uses `total cycles/FFT` and therefore includes that reorder cost.
+
+`Max component error` and `Max tolerance ratio` depend on the operator sequence
+used by each implementation. Separate multiply/add operations, fused
+multiply-add/subtract instructions, unity-twiddle specialization, and a changed
+evaluation order can produce different valid FP32 rounding results. These
+values therefore describe numerical margin rather than rank implementations by
+correctness. The validation result is determined by the number of points whose
+tolerance ratio exceeds 1.0, together with the non-finite output count; all
+results compared here have zero mismatches and zero non-finite outputs.
+
+For component $c\in\{\mathrm{real},\mathrm{imag}\}$, the reported tolerance
+ratio is
+
+$$
+r_c = \frac{\lvert y_c-\hat{y}_c\rvert}
+           {\mathrm{atol}+\mathrm{rtol}\lvert\hat{y}_c\rvert},
+\qquad
+r=\max(r_{\mathrm{real}},r_{\mathrm{imag}}).
+$$
+
+A complex point is a mismatch when $r>1$.
+
+The speedups in the table are calculated as
+
+$$
+S_{\mathrm{kernel}}
+=\frac{C_{\mathrm{CPU/FFT}}}{C_{\mathrm{RVV\ kernel/FFT}}},
+\qquad
+S_{\mathrm{layout+FFT}}
+=\frac{C_{\mathrm{CPU/FFT}}}{C_{\mathrm{RVV\ total/FFT}}}.
+$$
+
+| RVV configuration | RVV FFT cycles/FFT | RVV total cycles/FFT | Kernel speedup vs CPU | End-to-end speedup vs CPU |
+| --- | ---: | ---: | ---: | ---: |
+| `GENV128D64` | 34,327 | 84,979 | 27.65x | 11.17x |
+| `GENV128D128` | 22,781 | 72,646 | 41.67x | 13.07x |
+| `GENV256D64` | 31,323 | 81,980 | 30.31x | 11.58x |
+| `GENV256D128` | 19,630 | 69,565 | 48.36x | 13.65x |
+| `GENVV512D128` | 18,424 | 68,269 | 51.52x | 13.90x |
+| `LGVV128D128` | 22,219 | 72,101 | 42.72x | 13.17x |
+| `LGVV256D128` | 18,733 | 68,647 | 50.67x | 13.83x |
+| `LGVV512D128` | 17,498 | 67,377 | 54.25x | 14.09x |
+
+The passing m4 and m8 butterflies rule out a general high-LMUL floating-point
+pipeline failure. The `e32m1` bit-reversal form is retained for FPGA
+compatibility and deterministic validation.

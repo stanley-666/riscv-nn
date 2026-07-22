@@ -58,17 +58,28 @@ endif
 ifeq ($(HARDWARE_CONFIG),V128D128B)
   ARCH := rv64gcv_zvl128b_zve64d_zvfh_zfh_zba_zbb_zbs_zvbb
 endif
+ifeq ($(HARDWARE_CONFIG),cpu)
+  ARCH := rv64gc_zicntr_zihpm
+endif
 ARCH             ?= rv64gcv
 
+ifeq ($(BACKEND),cpu)
+  BAREMETAL_ENABLE_VECTOR := 0
+  TARGET_SUFFIX := nn_cpu_baremetal
+else
+  BAREMETAL_ENABLE_VECTOR := 1
+  TARGET_SUFFIX := nn_rvv_baremetal
+endif
+
 BUILD_DIR        ?= $(ROOT_DIR)/build/baremetal
-TARGET           ?= $(BUILD_DIR)/$(TESTBENCH)/$(HARDWARE_CONFIG)_nn_rvv_baremetal
+TARGET           ?= $(BUILD_DIR)/$(TESTBENCH)/$(HARDWARE_CONFIG)_$(TARGET_SUFFIX)
 OBJ_DIR          := $(BUILD_DIR)/$(TESTBENCH)/$(HARDWARE_CONFIG)/obj
 
 INCLUDES         := -I$(HEADER_DIR) -I$(SRC_DIR) -I$(CURDIR)/include \
                     -I$(APP_DIR) -I$(MODEL_DATA_DIR)
 COMMON_CFLAGS    := -O3 -march=$(ARCH) -mabi=$(ABI) -mtune=rocket \
                     -msmall-data-limit=0 -Wall -Wextra -std=c11 \
-                    -DBAREMETAL -DENABLE_VECTOR=1 -ffreestanding \
+                    -DBAREMETAL -DENABLE_VECTOR=$(BAREMETAL_ENABLE_VECTOR) -ffreestanding \
                     -nostdlib -nostartfiles -mcmodel=medany \
                     -DBAREMETAL_CPU_HZ=$(BAREMETAL_CPU_HZ) \
                     -DBUILD_DATE=\"$(shell date +%Y%m%d)\" \

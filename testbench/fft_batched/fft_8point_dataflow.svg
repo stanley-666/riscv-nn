@@ -1,0 +1,172 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="850" viewBox="0 0 1400 850">
+  <defs>
+    <style>
+      .title { font: 700 28px sans-serif; fill: #172033; }
+      .subtitle { font: 16px sans-serif; fill: #475569; }
+      .stage { font: 700 18px sans-serif; fill: #172033; text-anchor: middle; }
+      .small { font: 14px sans-serif; fill: #475569; text-anchor: middle; }
+      .label { font: 17px monospace; fill: #172033; dominant-baseline: middle; }
+      .twiddle { font: 700 14px sans-serif; fill: #b42318; }
+      .wire { stroke: #64748b; stroke-width: 2.2; fill: none; }
+      .flow { stroke: #2563eb; stroke-width: 2.6; fill: none; marker-end: url(#arrow); }
+      .butterfly { stroke: #7c3aed; stroke-width: 2.2; fill: none; }
+      .node { fill: #ffffff; stroke: #2563eb; stroke-width: 2.2; }
+      .mul { fill: #fff1f2; stroke: #e11d48; stroke-width: 2; }
+      .add { fill: #ecfdf5; stroke: #059669; stroke-width: 2; }
+      .sub { fill: #fff7ed; stroke: #ea580c; stroke-width: 2; }
+      .op { font: 700 15px sans-serif; fill: #172033; text-anchor: middle; dominant-baseline: middle; }
+      .bmark { fill: #7c3aed; stroke: #5b21b6; stroke-width: 2; }
+      .btext { font: 700 13px sans-serif; fill: #ffffff; text-anchor: middle; dominant-baseline: middle; }
+      .box { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1.5; rx: 12; }
+      .note { font: 15px sans-serif; fill: #334155; }
+      .equation { font: 16px monospace; fill: #172033; }
+    </style>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#2563eb"/>
+    </marker>
+  </defs>
+
+  <rect width="1400" height="760" fill="#ffffff"/>
+  <text x="700" y="42" class="title" text-anchor="middle">8-point radix-2 DIT FFT dataflow</text>
+  <text x="700" y="70" class="subtitle" text-anchor="middle">Bit-reversed input order; B(a,b,W) produces a + Wb and a − Wb</text>
+
+  <rect x="25" y="105" width="1350" height="505" class="box"/>
+
+  <text x="105" y="135" class="stage">Input</text>
+  <text x="105" y="158" class="small">bit-reversed</text>
+  <text x="385" y="135" class="stage">Stage 1</text>
+  <text x="385" y="158" class="small">size 2</text>
+  <text x="700" y="135" class="stage">Stage 2</text>
+  <text x="700" y="158" class="small">size 4</text>
+  <text x="1015" y="135" class="stage">Stage 3</text>
+  <text x="1015" y="158" class="small">size 8</text>
+  <text x="1300" y="135" class="stage">Output</text>
+  <text x="1300" y="158" class="small">natural order</text>
+
+  <!-- Eight horizontal data lanes. -->
+  <g>
+    <path d="M145 200 H1260" class="wire"/><path d="M145 250 H1260" class="wire"/>
+    <path d="M145 300 H1260" class="wire"/><path d="M145 350 H1260" class="wire"/>
+    <path d="M145 400 H1260" class="wire"/><path d="M145 450 H1260" class="wire"/>
+    <path d="M145 500 H1260" class="wire"/><path d="M145 550 H1260" class="wire"/>
+  </g>
+
+  <!-- Input and output labels. -->
+  <g>
+    <text x="65" y="200" class="label">x[0]</text><text x="65" y="250" class="label">x[4]</text>
+    <text x="65" y="300" class="label">x[2]</text><text x="65" y="350" class="label">x[6]</text>
+    <text x="65" y="400" class="label">x[1]</text><text x="65" y="450" class="label">x[5]</text>
+    <text x="65" y="500" class="label">x[3]</text><text x="65" y="550" class="label">x[7]</text>
+    <text x="1275" y="200" class="label">X[0]</text><text x="1275" y="250" class="label">X[1]</text>
+    <text x="1275" y="300" class="label">X[2]</text><text x="1275" y="350" class="label">X[3]</text>
+    <text x="1275" y="400" class="label">X[4]</text><text x="1275" y="450" class="label">X[5]</text>
+    <text x="1275" y="500" class="label">X[6]</text><text x="1275" y="550" class="label">X[7]</text>
+  </g>
+
+  <!-- Stage 1 butterflies: (0,1), (2,3), (4,5), (6,7). -->
+  <g>
+    <path d="M290 200 C330 200 330 250 370 250 M290 250 C330 250 330 200 370 200" class="butterfly"/>
+    <path d="M290 300 C330 300 330 350 370 350 M290 350 C330 350 330 300 370 300" class="butterfly"/>
+    <path d="M290 400 C330 400 330 450 370 450 M290 450 C330 450 330 400 370 400" class="butterfly"/>
+    <path d="M290 500 C330 500 330 550 370 550 M290 550 C330 550 330 500 370 500" class="butterfly"/>
+    <circle cx="330" cy="225" r="12" class="bmark"/><text x="330" y="225" class="btext">B</text>
+    <circle cx="330" cy="325" r="12" class="bmark"/><text x="330" y="325" class="btext">B</text>
+    <circle cx="330" cy="425" r="12" class="bmark"/><text x="330" y="425" class="btext">B</text>
+    <circle cx="330" cy="525" r="12" class="bmark"/><text x="330" y="525" class="btext">B</text>
+    <circle cx="290" cy="250" r="12" class="mul"/><text x="290" y="250" class="op">×</text><text x="305" y="240" class="twiddle">W₈⁰</text>
+    <circle cx="290" cy="350" r="12" class="mul"/><text x="290" y="350" class="op">×</text><text x="305" y="340" class="twiddle">W₈⁰</text>
+    <circle cx="290" cy="450" r="12" class="mul"/><text x="290" y="450" class="op">×</text><text x="305" y="440" class="twiddle">W₈⁰</text>
+    <circle cx="290" cy="550" r="12" class="mul"/><text x="290" y="550" class="op">×</text><text x="305" y="540" class="twiddle">W₈⁰</text>
+    <circle cx="370" cy="200" r="12" class="add"/><text x="370" y="200" class="op">+</text>
+    <circle cx="370" cy="250" r="12" class="sub"/><text x="370" y="250" class="op">−</text>
+    <circle cx="370" cy="300" r="12" class="add"/><text x="370" y="300" class="op">+</text>
+    <circle cx="370" cy="350" r="12" class="sub"/><text x="370" y="350" class="op">−</text>
+    <circle cx="370" cy="400" r="12" class="add"/><text x="370" y="400" class="op">+</text>
+    <circle cx="370" cy="450" r="12" class="sub"/><text x="370" y="450" class="op">−</text>
+    <circle cx="370" cy="500" r="12" class="add"/><text x="370" y="500" class="op">+</text>
+    <circle cx="370" cy="550" r="12" class="sub"/><text x="370" y="550" class="op">−</text>
+  </g>
+
+  <!-- Stage 2 butterflies: (0,2), (1,3), (4,6), (5,7). -->
+  <g>
+    <path d="M590 200 C635 200 635 300 680 300 M590 300 C635 300 635 200 680 200" class="butterfly"/>
+    <path d="M590 250 C635 250 635 350 680 350 M590 350 C635 350 635 250 680 250" class="butterfly"/>
+    <path d="M590 400 C635 400 635 500 680 500 M590 500 C635 500 635 400 680 400" class="butterfly"/>
+    <path d="M590 450 C635 450 635 550 680 550 M590 550 C635 550 635 450 680 450" class="butterfly"/>
+    <circle cx="635" cy="250" r="12" class="bmark"/><text x="635" y="250" class="btext">B</text>
+    <circle cx="635" cy="300" r="12" class="bmark"/><text x="635" y="300" class="btext">B</text>
+    <circle cx="635" cy="450" r="12" class="bmark"/><text x="635" y="450" class="btext">B</text>
+    <circle cx="635" cy="500" r="12" class="bmark"/><text x="635" y="500" class="btext">B</text>
+    <circle cx="590" cy="300" r="12" class="mul"/><text x="590" y="300" class="op">×</text><text x="605" y="290" class="twiddle">W₈⁰</text>
+    <circle cx="590" cy="350" r="12" class="mul"/><text x="590" y="350" class="op">×</text><text x="605" y="340" class="twiddle">W₈²</text>
+    <circle cx="590" cy="500" r="12" class="mul"/><text x="590" y="500" class="op">×</text><text x="605" y="490" class="twiddle">W₈⁰</text>
+    <circle cx="590" cy="550" r="12" class="mul"/><text x="590" y="550" class="op">×</text><text x="605" y="540" class="twiddle">W₈²</text>
+    <circle cx="680" cy="200" r="12" class="add"/><text x="680" y="200" class="op">+</text>
+    <circle cx="680" cy="300" r="12" class="sub"/><text x="680" y="300" class="op">−</text>
+    <circle cx="680" cy="250" r="12" class="add"/><text x="680" y="250" class="op">+</text>
+    <circle cx="680" cy="350" r="12" class="sub"/><text x="680" y="350" class="op">−</text>
+    <circle cx="680" cy="400" r="12" class="add"/><text x="680" y="400" class="op">+</text>
+    <circle cx="680" cy="500" r="12" class="sub"/><text x="680" y="500" class="op">−</text>
+    <circle cx="680" cy="450" r="12" class="add"/><text x="680" y="450" class="op">+</text>
+    <circle cx="680" cy="550" r="12" class="sub"/><text x="680" y="550" class="op">−</text>
+  </g>
+
+  <!-- Stage 3 butterflies: (0,4), (1,5), (2,6), (3,7). -->
+  <g>
+    <path d="M900 200 C950 200 950 400 1000 400 M900 400 C950 400 950 200 1000 200" class="butterfly"/>
+    <path d="M900 250 C950 250 950 450 1000 450 M900 450 C950 450 950 250 1000 250" class="butterfly"/>
+    <path d="M900 300 C950 300 950 500 1000 500 M900 500 C950 500 950 300 1000 300" class="butterfly"/>
+    <path d="M900 350 C950 350 950 550 1000 550 M900 550 C950 550 950 350 1000 350" class="butterfly"/>
+    <circle cx="950" cy="300" r="12" class="bmark"/><text x="950" y="300" class="btext">B</text>
+    <circle cx="950" cy="350" r="12" class="bmark"/><text x="950" y="350" class="btext">B</text>
+    <circle cx="950" cy="400" r="12" class="bmark"/><text x="950" y="400" class="btext">B</text>
+    <circle cx="950" cy="450" r="12" class="bmark"/><text x="950" y="450" class="btext">B</text>
+    <circle cx="900" cy="400" r="12" class="mul"/><text x="900" y="400" class="op">×</text><text x="915" y="390" class="twiddle">W₈⁰</text>
+    <circle cx="900" cy="450" r="12" class="mul"/><text x="900" y="450" class="op">×</text><text x="915" y="440" class="twiddle">W₈¹</text>
+    <circle cx="900" cy="500" r="12" class="mul"/><text x="900" y="500" class="op">×</text><text x="915" y="490" class="twiddle">W₈²</text>
+    <circle cx="900" cy="550" r="12" class="mul"/><text x="900" y="550" class="op">×</text><text x="915" y="540" class="twiddle">W₈³</text>
+    <circle cx="1000" cy="200" r="12" class="add"/><text x="1000" y="200" class="op">+</text>
+    <circle cx="1000" cy="400" r="12" class="sub"/><text x="1000" y="400" class="op">−</text>
+    <circle cx="1000" cy="250" r="12" class="add"/><text x="1000" y="250" class="op">+</text>
+    <circle cx="1000" cy="450" r="12" class="sub"/><text x="1000" y="450" class="op">−</text>
+    <circle cx="1000" cy="300" r="12" class="add"/><text x="1000" y="300" class="op">+</text>
+    <circle cx="1000" cy="500" r="12" class="sub"/><text x="1000" y="500" class="op">−</text>
+    <circle cx="1000" cy="350" r="12" class="add"/><text x="1000" y="350" class="op">+</text>
+    <circle cx="1000" cy="550" r="12" class="sub"/><text x="1000" y="550" class="op">−</text>
+  </g>
+
+  <!-- Stage boundaries and flow direction. -->
+  <g>
+    <path d="M155 180 H270" class="flow"/><path d="M410 180 H570" class="flow"/>
+    <path d="M720 180 H880" class="flow"/><path d="M1040 180 H1240" class="flow"/>
+  </g>
+
+  <!-- Detailed definition of one butterfly and batched RVV mapping. -->
+  <rect x="25" y="630" width="1350" height="195" class="box"/>
+  <text x="250" y="655" class="stage">One radix-2 butterfly B(a,b,W₈ᵏ)</text>
+
+  <text x="55" y="680" class="label">a</text>
+  <text x="55" y="730" class="label">b</text>
+  <path d="M75 680 H288" class="wire"/>
+  <path d="M75 730 H118" class="wire"/>
+  <circle cx="130" cy="730" r="12" class="mul"/><text x="130" y="730" class="op">×</text>
+  <text x="126" y="708" class="twiddle">W₈ᵏ</text>
+  <path d="M142 730 H195 C235 730 245 680 288 680" class="wire"/>
+  <path d="M195 730 H288" class="wire"/>
+  <text x="177" y="750" class="label">t = W₈ᵏb</text>
+  <circle cx="300" cy="680" r="12" class="add"/><text x="300" y="680" class="op">+</text>
+  <circle cx="300" cy="730" r="12" class="sub"/><text x="300" y="730" class="op">−</text>
+  <path d="M312 680 H365" class="flow"/><path d="M312 730 H365" class="flow"/>
+  <text x="380" y="680" class="label">a + t</text>
+  <text x="380" y="730" class="label">a − t</text>
+
+  <text x="535" y="670" class="note">a:</text><text x="565" y="670" class="equation">upper complex input</text>
+  <text x="535" y="697" class="note">b:</text><text x="565" y="697" class="equation">lower complex input</text>
+  <text x="535" y="724" class="note">W₈ᵏ:</text><text x="585" y="724" class="equation">twiddle factor, exp(−j2πk/8)</text>
+  <text x="535" y="751" class="note">t:</text><text x="565" y="751" class="equation">twiddle-rotated lower input, W₈ᵏ · b</text>
+
+  <text x="50" y="785" class="note">Batched RVV mapping:</text>
+  <text x="225" y="785" class="equation">a, b, and t are vectors [batch 0 … batch 63] for one FFT bin</text>
+  <text x="50" y="812" class="note">Implementation:</text>
+  <text x="165" y="812" class="equation">bit reversal uses e32m1; butterflies vectorize across batches with e32m8</text>
+</svg>

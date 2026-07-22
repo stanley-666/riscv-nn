@@ -8,9 +8,9 @@ static void run_fft_cpu(void)
 
 static const BaremetalTask tasks[] = {{
     .name = "fft_cpu",
-    .run_scalar_single = NULL,
+    .run_scalar_single = run_fft_cpu,
     .run_scalar_dataset = NULL,
-    .run_rvv_single = run_fft_cpu,
+    .run_rvv_single = NULL,
     .run_rvv_dataset = NULL,
 }};
 

@@ -70,13 +70,25 @@ Build the same generated vectors as a bare-metal RVV image:
 The legacy Makefile path is also supported:
 
 ```sh
-make baremetal TESTBENCH=fft BACKEND=vector HARDWARE_CONFIG=V128D128B
+make baremetal \
+    TESTBENCH=fft \
+    BACKEND=vector \
+    HARDWARE_CONFIG=V128D128B
 ```
 
 After verifying the target is the intended unmounted whole SD-card device,
 flash with:
 
 ```sh
-make baremetal-flash TESTBENCH=fft BACKEND=vector \
-    HARDWARE_CONFIG=V128D128B SDCARD_DEVICE=/dev/sdc FLASH_CONFIRM=YES
+lsblk
+
+make baremetal-flash \
+    TESTBENCH=fft \
+    BACKEND=vector \
+    HARDWARE_CONFIG=V128D128B \
+    SDCARD_DEVICE=/dev/sdX \
+    FLASH_CONFIRM=YES
 ```
+
+Replace `/dev/sdX` with the intended unmounted whole SD-card device, not a
+partition. Flashing overwrites data on the selected device.

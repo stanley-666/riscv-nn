@@ -13,6 +13,13 @@
 
 #define FFT_ATOL 5.0e-5f
 #define FFT_RTOL 1.0e-6f
+#define FFT_BATCH_COUNT 64
+#define FFT_MAX_MISMATCH_REPORTS 64
+
+static float actual_real[FFT_BATCH_COUNT][FFT_SIZE]
+    __attribute__((aligned(64)));
+static float actual_imag[FFT_BATCH_COUNT][FFT_SIZE]
+    __attribute__((aligned(64)));
 
 static uint64_t read_cycles(void)
 {
@@ -94,52 +101,87 @@ static void print_u64_decimal(uint64_t value)
 
 int fft_cpu_testbench_run(void)
 {
-    float actual_real[FFT_SIZE];
-    float actual_imag[FFT_SIZE];
-    for (size_t index = 0; index < FFT_SIZE; ++index) {
-        actual_real[index] = input_real[index];
-        actual_imag[index] = input_imag[index];
-    }
+    for (size_t batch = 0; batch < FFT_BATCH_COUNT; ++batch)
+        for (size_t index = 0; index < FFT_SIZE; ++index) {
+            actual_real[batch][index] = input_real[index];
+            actual_imag[batch][index] = input_imag[index];
+        }
 
     uint64_t start = read_cycles();
-    fft_cpu_f32(actual_real, actual_imag, FFT_SIZE);
+    for (size_t batch = 0; batch < FFT_BATCH_COUNT; ++batch)
+        fft_cpu_f32(actual_real[batch], actual_imag[batch], FFT_SIZE);
     uint64_t end = read_cycles();
+    uint64_t fft_cycles = end - start;
 
     float max_error = 0.0f;
-    size_t max_error_bin = 0;
+    size_t max_error_bin = 0, max_error_batch = 0;
     float max_error_ratio = 0.0f;
-    size_t max_error_ratio_bin = 0;
-    for (size_t index = 0; index < FFT_SIZE; ++index) {
-        float real_error = fabsf(actual_real[index] - groundtruth_real[index]);
-        float imag_error = fabsf(actual_imag[index] - groundtruth_imag[index]);
-        float error = real_error > imag_error ? real_error : imag_error;
-        float real_limit = FFT_ATOL + FFT_RTOL * fabsf(groundtruth_real[index]);
-        float imag_limit = FFT_ATOL + FFT_RTOL * fabsf(groundtruth_imag[index]);
-        float real_ratio = real_error / real_limit;
-        float imag_ratio = imag_error / imag_limit;
-        float error_ratio = real_ratio > imag_ratio ? real_ratio : imag_ratio;
-        if (error > max_error) {
-            max_error = error;
-            max_error_bin = index;
+    size_t max_error_ratio_bin = 0, max_error_ratio_batch = 0;
+    size_t mismatch_count = 0, reported_mismatch_count = 0;
+    size_t non_finite_count = 0;
+    for (size_t batch = 0; batch < FFT_BATCH_COUNT; ++batch) {
+        for (size_t index = 0; index < FFT_SIZE; ++index) {
+            float ar = actual_real[batch][index];
+            float ai = actual_imag[batch][index];
+            if (!isfinite(ar) || !isfinite(ai)) {
+                ++non_finite_count;
+                ++mismatch_count;
+                if (reported_mismatch_count < FFT_MAX_MISMATCH_REPORTS) {
+                    printf("mismatch batch %u bin %u: non-finite actual\n",
+                        (unsigned)batch, (unsigned)index);
+                    ++reported_mismatch_count;
+                }
+                continue;
+            }
+            float real_error = fabsf(ar - groundtruth_real[index]);
+            float imag_error = fabsf(ai - groundtruth_imag[index]);
+            float error = real_error > imag_error ? real_error : imag_error;
+            float real_limit = FFT_ATOL + FFT_RTOL * fabsf(groundtruth_real[index]);
+            float imag_limit = FFT_ATOL + FFT_RTOL * fabsf(groundtruth_imag[index]);
+            float real_ratio = real_error / real_limit;
+            float imag_ratio = imag_error / imag_limit;
+            float error_ratio = real_ratio > imag_ratio ? real_ratio : imag_ratio;
+            if (error > max_error) {
+                max_error = error;
+                max_error_bin = index;
+                max_error_batch = batch;
+            }
+            if (error_ratio > max_error_ratio) {
+                max_error_ratio = error_ratio;
+                max_error_ratio_bin = index;
+                max_error_ratio_batch = batch;
+            }
+            if (error_ratio > 1.0f) {
+                ++mismatch_count;
+                if (reported_mismatch_count < FFT_MAX_MISMATCH_REPORTS) {
+                    printf("mismatch batch %u bin %u\n", (unsigned)batch,
+                        (unsigned)index);
+                    printf("  actual:   %.6f %c%.6fj\n", ar,
+                        ai >= 0.0f ? '+' : '-', fabsf(ai));
+                    printf("  expected: %.6f %c%.6fj\n", groundtruth_real[index],
+                        groundtruth_imag[index] >= 0.0f ? '+' : '-',
+                        fabsf(groundtruth_imag[index]));
+                    ++reported_mismatch_count;
+                }
+            }
         }
-        if (error_ratio > max_error_ratio) {
-            max_error_ratio = error_ratio;
-            max_error_ratio_bin = index;
-        }
-        printf("bin %u: %.6f ", (unsigned)index, actual_real[index]);
-        if (actual_imag[index] >= 0.0f) {
-            printf("+");
-        }
-        printf("%.6fj\n", actual_imag[index]);
     }
 
-    printf("cycles: ");
-    print_u64_decimal(end - start);
-    printf("\nmax component error: %.6f at bin %u\n", max_error,
-        (unsigned)max_error_bin);
-    printf("max tolerance ratio: %.6f at bin %u\n", max_error_ratio,
-        (unsigned)max_error_ratio_bin);
-    if (max_error_ratio > 1.0f) {
+    printf("batches: %u\nFFT cycles: ", FFT_BATCH_COUNT);
+    print_u64_decimal(fft_cycles);
+    printf("\nFFT cycles per FFT: ");
+    print_u64_decimal(fft_cycles / FFT_BATCH_COUNT);
+    printf("\nmax component error: %.6f at batch %u bin %u\n", max_error,
+        (unsigned)max_error_batch, (unsigned)max_error_bin);
+    printf("max tolerance ratio: %.6f at batch %u bin %u\n", max_error_ratio,
+        (unsigned)max_error_ratio_batch, (unsigned)max_error_ratio_bin);
+    printf("mismatched complex points: %u / %u\n", (unsigned)mismatch_count,
+        (unsigned)(FFT_BATCH_COUNT * FFT_SIZE));
+    if (mismatch_count > reported_mismatch_count)
+        printf("mismatch report truncated: showed first %u of %u points\n",
+            (unsigned)reported_mismatch_count, (unsigned)mismatch_count);
+    printf("non-finite outputs: %u\n", (unsigned)non_finite_count);
+    if (non_finite_count > 0 || max_error_ratio > 1.0f) {
         printf("FFT CPU: FAIL (atol %.6f, rtol %.6f)\n", FFT_ATOL, FFT_RTOL);
         return 1;
     }

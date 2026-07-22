@@ -38,6 +38,31 @@ Build the bare-metal RVV image with:
 ./scripts/configure_build.sh baremetal vector fft_gemv V128D128B
 ```
 
+The equivalent Makefile command is:
+
+```sh
+make baremetal \
+    TESTBENCH=fft_gemv \
+    BACKEND=vector \
+    HARDWARE_CONFIG=V128D128B
+```
+
+After identifying the intended unmounted whole SD-card device, flash with:
+
+```sh
+lsblk
+
+make baremetal-flash \
+    TESTBENCH=fft_gemv \
+    BACKEND=vector \
+    HARDWARE_CONFIG=V128D128B \
+    SDCARD_DEVICE=/dev/sdX \
+    FLASH_CONFIRM=YES
+```
+
+Replace `/dev/sdX` with the whole SD-card device, not a partition. Flashing
+overwrites data on the selected device.
+
 The generated ELF, binary, and map are placed under
 `build/baremetal/fft_gemv/`. The 1024x1024 original and reordered complex
 twiddle matrices occupy about 16 MiB of BSS in external RAM.
