@@ -81,3 +81,19 @@ python3 py/fft/fft_groundtruth.py --output-dir /tmp/fft-groundtruth
 The generated `fft_input.csv` and `fft_groundtruth.csv` files contain `index`,
 `real`, and `imag` columns. The command exits with status 1 if the maximum
 absolute error is larger than `--atol` (default `1e-5`).
+
+## Scaled Q7 int8 FFT vectors
+
+`fft_int8_groundtruth.py` quantizes the deterministic complex input to signed
+Q7 and emulates the RVV fixed-point radix-2 kernel exactly. Each butterfly
+stage applies RNU division by two, giving total scale $1/N$. Q7 complex
+products widen through int16 into int32 complex accumulators, followed by an
+RNU right shift by seven and int8 saturation. Generate the header with:
+
+```sh
+python3 py/fft/fft_int8_groundtruth.py --size 1024 \
+    --header testbench/fft_batched_int8/fft_int8_vectors.h
+```
+
+The generated input and ground-truth arrays are all 64-byte aligned. The int8
+testbench requires exact equality rather than a floating-point tolerance.

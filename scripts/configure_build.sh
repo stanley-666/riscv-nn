@@ -35,6 +35,8 @@ baremetal)
     if [ -z "$profile" ]; then
         if [ "$backend" = "gemmini" ]; then
             profile=GEMMINI
+        elif [ "$backend" = "cpu" ]; then
+            profile=cpu
         else
             profile=V128D128B
         fi

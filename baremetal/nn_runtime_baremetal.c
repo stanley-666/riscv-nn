@@ -36,6 +36,13 @@ void safe_free(void *ptr)
     free(ptr);
 }
 
+uint64_t nn_runtime_read_cycles(void)
+{
+    uint64_t cycles;
+    __asm__ volatile("rdcycle %0" : "=r"(cycles) :: "memory");
+    return cycles;
+}
+
 /*
 Copyright (c) 2025, MC2 Lab, National Taiwan Normal University.
 SPDX-License-Identifier: Apache-2.0

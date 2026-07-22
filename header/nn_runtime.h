@@ -2,10 +2,12 @@
 #define _NN_RUNTIME_H_
 
 #include <stddef.h>
+#include <stdint.h>
 
 void *safe_malloc(size_t size);
 void *safe_calloc(size_t num, size_t size);
 void safe_free(void *ptr);
+uint64_t nn_runtime_read_cycles(void);
 
 /*
 Copyright (c) 2025, MC2 Lab, National Taiwan Normal University.

@@ -69,22 +69,70 @@ The twiddle $W_m^k$ is shared by all 64 batches in that butterfly.
 
 ![8-point radix-2 DIT FFT dataflow](fft_8point_dataflow.svg)
 
-The batch-major input `[batch][bin]` is transposed in a measured preprocessing
-step into `[bin][batch]`. Each radix-2 butterfly uses scalar real/imaginary
-twiddle factors and LMUL=m8 vectors spanning independent batches. The
-butterfly is isolated in `butterfly_rvv_f32()` and written entirely with RVV
-intrinsics. Twiddle-factor generation is isolated in `twiddle_f32()` so the
-stage loop only describes index pairing and butterfly execution. Compiler-only
-fences preserve the intended vector-load to
-floating-point element-group chaining order without emitting target
-instructions.
+## Runtime plan and workspace
 
-The stage loop computes each `(stage, offset)` twiddle only once and reuses it
-across all blocks. The `offset == 0` case uses `butterfly_unity_rvv_f32()`,
-which replaces multiplication by $1+0j$ with vector add/sub operations.
+The caller supplies the input samples, FFT size $N$, and batch count. At
+runtime, `fft_plan_init_f32()` verifies that $N$ is a supported power of two,
+computes the stage count, and initializes every stage's twiddle table. For a
+stage with half-size $h$, its twiddles start at `h - 1`; consequently all
+stage-local tables occupy exactly
 
-The input and working arrays are explicitly aligned to 64-byte boundaries.
-Memory reordering is measured separately from FFT execution.
+$$
+1+2+4+\cdots+\frac{N}{2}=N-1
+$$
+
+complex entries. Twiddle initialization is measured separately as
+`twiddle plan cycles` and is not part of `FFT cycles`. A plan may be reused for
+multiple inputs of the same shape without recomputing the table.
+
+The implementation allocates four 64-byte-aligned split-complex workspace
+buffers through `nn_runtime.h`:
+
+| Buffer | Runtime elements used | Purpose |
+| --- | ---: | --- |
+| `fft_data_real` | $N\times B$ | real input and in-place real output |
+| `fft_data_imag` | $N\times B$ | imaginary input and in-place imaginary output |
+| `fft_twiddle_real` | $N-1$ | real part of every stage's twiddles |
+| `fft_twiddle_imag` | $N-1$ | imaginary part of every stage's twiddles |
+
+Every allocation is sized from the runtime $N$ and $B$. Linux/Spike links
+`csrc/nn_runtime_linux.c`, while bare-metal links
+`baremetal/nn_runtime_baremetal.c`; both runtime allocators return 64-byte-
+aligned storage. The plan releases all four buffers through `safe_free()` when
+the test completes. Thus allocation occurs once during plan initialization and
+never inside the hot loop. Input loading writes every normal-order bin into one
+contiguous `[bin][batch]` row. At the start of the FFT region, an explicit
+`e32,m1` row swap performs bit reversal. Butterfly stages then use LMUL=m8 with
+lanes representing batches, so every vector load/store is unit-stride. This
+avoids the high FPGA cost observed for `vsuxei32`.
+
+Cycle reads also go through `nn_runtime_read_cycles()`. Platform selection is
+therefore a link-time runtime choice rather than conditional platform code in
+the FFT testbench.
+
+Each radix-2 butterfly loads its precomputed scalar twiddle, multiplies the
+lower input vector, and computes the upper/lower add-subtract results with
+LMUL=m8 vectors. The `offset == 0` case uses
+`butterfly_unity_rvv_f32()`, replacing multiplication by $1+0j$ with vector
+add/sub operations. Loads, arithmetic results, and stores use separate named
+intrinsics rather than nested operands, and the buffer arguments are
+`restrict` qualified. This lets the compiler issue independent odd-real,
+odd-imaginary, and even-real loads before the dependent multiply/FMA chain;
+there are no compiler fences in the butterfly. Bit-reversal swaps use the
+FPGA-compatible `e32,m1` sequence; butterfly arithmetic uses `e32,m8`.
+
+The LMUL=m8 butterfly batch dimension uses a VLMAX main loop followed by at
+most one tail outside that loop. VL validity is checked once for VLMAX and once
+only when a non-empty tail exists. The unity-twiddle decision is also outside
+the batch strip-mining loop.
+
+The reported timing regions are:
+
+- `twiddle plan cycles`: one-time plan and twiddle initialization;
+- `input layout cycles`: contiguous loading into `[bin][batch]`;
+- `FFT cycles`: `e32,m1` bit reversal plus all butterfly stages;
+- `reused-plan total cycles`: input layout plus FFT;
+- `first-run total cycles`: plan initialization, input layout, and FFT.
 
 Before entering the measured regions, the testbench rejects NaN/Inf inputs and
 checks the conservative FP32 component bound
@@ -146,59 +194,62 @@ rejects partitions and mounted devices, then writes the binary beginning at
 
 ## Performance results
 
-The recorded results below use the earlier LMUL=m4 butterfly kernel. New
-LMUL=m8 measurements should be recorded separately rather than compared as if
-they came from the current binary.
+These results apply only to the current four-buffer runtime-plan implementation:
+contiguous input layout, `e32,m1` bit-reversal row swaps, LMUL=m8 butterflies,
+the current load scheduling, and VLMAX main/tail loops. Older implementations
+and measurements are intentionally omitted to avoid comparing different code
+versions.
 
-Each row below is a single Spike run with 64 identical 1024-point FP32 FFTs.
-The two earlier m4 runs passed with maximum component error `0.000024` at
-batch 0 bin 757 and maximum tolerance ratio `0.385719` at batch 0 bin 1015.
+The Spike command for the current implementation is:
 
-| Environment | Configuration | Batches | Memory reorder cycles | FFT cycles | Total cycles | FFT cycles/FFT | Total cycles/FFT | Result |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| Spike simulation | `zvl128b`, LMUL=m4 | 64 | 827,078 | 1,104,678 | 1,931,756 | 17,260 | 30,183 | PASS |
-| Spike simulation | `zvl512b`, LMUL=m4 | 64 | 827,078 | 608,994 | 1,436,072 | 9,515 | 22,438 | PASS |
-| Spike simulation | `zvl128b`, LMUL=m8 | 64 | 827,076 | 665,325 | 1,492,401 | 10,395 | 23,318 | PASS |
+```sh
+spike --isa=rv64gcv_zicntr_zihpm_zvbb_zvl128b_zve64d \
+    pk build/linux-pk/fft_batched/zvl128b/vector/static/fft_batched
+```
 
-The `zvl128b`, LMUL=m8 run used the current kernel and passed all 65,536
-complex points with zero non-finite outputs. Its maximum component error was
-`0.000026` and maximum tolerance ratio was `0.461186`, both at batch 0,
-bin 1015.
+| Environment | Configuration | FFT size | Batches | Twiddle plan cycles | Input layout cycles | FFT cycles | Reused-plan total cycles | First-run total cycles | FFT cycles/FFT | Reused-plan cycles/FFT | First-run cycles/FFT | Mismatches | Result |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Spike simulation | Scalar CPU | 1,024 | 64 | 114,235 | 839,015 | 15,432,206 | 16,271,221 | 16,385,456 | 241,128 | 254,237 | 256,022 | 0 / 65,536 | PASS |
+| Spike simulation | `zvl128b`, LMUL=m8, contiguous layout + row swap | 1,024 | 64 | 105,900 | 576,403 | 517,852 | 1,094,255 | 1,200,155 | 8,091 | 17,097 | 18,752 | 0 / 65,536 | PASS |
+| Genesys2 FPGA, cold cache | Scalar CPU, 50 MHz | 1,024 | 64 | 171,198 | 759,907 | 12,760,529 | 13,520,436 | 13,691,634 | 199,383 | 211,256 | 213,931 | 0 / 65,536 | PASS |
+| Genesys2 FPGA, cold cache | `GENV128D64`, VLEN=128, LMUL=m8 | 1,024 | 64 | 171,159 | 544,211 | 2,129,139 | 2,673,350 | 2,844,509 | 33,267 | 41,771 | 44,445 | 0 / 65,536 | PASS |
+| Genesys2 FPGA, cold cache | `GENV128D128`, VLEN=128, LMUL=m8 | 1,024 | 64 | 171,095 | 545,892 | 1,309,551 | 1,855,443 | 2,026,538 | 20,461 | 28,991 | 31,664 | 0 / 65,536 | PASS |
+| Genesys2 FPGA, cold cache | `GENV256D64`, VLEN=256, LMUL=m8 | 1,024 | 64 | 171,414 | 543,767 | 2,033,171 | 2,576,938 | 2,748,352 | 31,768 | 40,264 | 42,943 | 0 / 65,536 | PASS |
+| Genesys2 FPGA, cold cache | `GENV256D128`, VLEN=256, LMUL=m8 | 1,024 | 64 | 171,275 | 545,437 | 1,175,785 | 1,721,222 | 1,892,497 | 18,371 | 26,894 | 29,570 | 0 / 65,536 | PASS |
+| Genesys2 FPGA, cold cache | `GENV512D64`, VLEN=512, LMUL=m8 | 1,024 | 64 | 171,371 | 545,571 | 1,110,281 | 1,655,852 | 1,827,223 | 17,348 | 25,872 | 28,550 | 0 / 65,536 | PASS |
+| Genesys2 FPGA, cold cache | `LGVV128D128`, VLEN=128, LMUL=m8 | 1,024 | 64 | 171,119 | 546,616 | 1,276,698 | 1,823,314 | 1,994,433 | 19,948 | 28,489 | 31,163 | 0 / 65,536 | PASS |
+| Genesys2 FPGA, cold cache | `LGVV256D128`, VLEN=256, LMUL=m8 | 1,024 | 64 | 171,217 | 545,702 | 1,136,012 | 1,681,714 | 1,852,931 | 17,750 | 26,276 | 28,952 | 0 / 65,536 | PASS |
+| Genesys2 FPGA, cold cache | `LGVV512D128`, VLEN=512, LMUL=m8 | 1,024 | 64 | 171,119 | 546,616 | 1,064,237 | 1,610,853 | 1,781,972 | 16,628 | 25,169 | 27,843 | 0 / 65,536 | PASS |
 
-Input initialization, validation, and bin printing are outside the measured
-regions. These values are from one run rather than an average.
+For the RVV rows, the maximum component error was `0.000026`, and the maximum
+tolerance ratio was `0.461186`; both occurred at batch 0, bin 1015. The scalar
+CPU rows reported maximum component error `0.000024` at batch 0, bin 757 and
+maximum tolerance ratio `0.385719` at batch 0, bin 1015. No non-finite outputs
+were observed. `First-run total` includes allocation and twiddle initialization,
+whereas `reused-plan total` represents another input using an already-created
+plan and excludes that row's one-time plan cost.
 
-### Genesys2 FPGA configuration matrix
+### Spike speedup over scalar CPU
 
-The bit-reversal swap is currently restricted to `e32m1` strip mining as a
-hardware-isolation workaround. The current butterfly arithmetic uses `e32m8`.
-This avoids the compiler-generated `e8,m1` plus 32-bit vector load/store
-sequence (effective EMUL=m4) while testing the arithmetic path at m8.
+The scalar and RVV implementations both use normal-order contiguous input
+layout and perform bit reversal inside the measured FFT region. Each value is
+from one Spike run rather than a multi-run average.
 
-With this workaround, the following Genesys2 runs pass all 65,536 complex
-points. These are single cold-cache runs, not warm-cache measurements or
-multi-run averages. The `LGVV512D128` row is from the build timestamped
-`20260722 114201`:
+| Compared region | Scalar CPU cycles | RVV cycles | RVV speedup |
+| --- | ---: | ---: | ---: |
+| FFT kernel | 15,432,206 | 517,852 | 29.80x |
+| Reused-plan total | 16,271,221 | 1,094,255 | 14.87x |
+| First-run total | 16,385,456 | 1,200,155 | 13.65x |
 
-| Configuration | Batches | Memory reorder cycles | FFT cycles | Total cycles | FFT cycles/FFT | Total cycles/FFT | Max component error | Max tolerance ratio | Mismatches | Result |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| `V512D128` (bit reversal `e32m1`, butterfly `e32m4`) | 64 | 3,190,883 | 1,373,879 | 4,564,762 | 21,466 | 71,324 | 0.000024 | 0.385719 | 0 / 65,536 | PASS |
-| `GENV128D64` (bit reversal `e32m1`, butterfly `e32m8`) | 64 | 3,241,677 | 2,196,989 | 5,438,666 | 34,327 | 84,979 | 0.000026 | 0.461186 | 0 / 65,536 | PASS |
-| `GENV128D128` (bit reversal `e32m1`, butterfly `e32m8`) | 64 | 3,191,320 | 1,458,026 | 4,649,346 | 22,781 | 72,646 | 0.000026 | 0.461186 | 0 / 65,536 | PASS |
-| `GENV256D64` (bit reversal `e32m1`, butterfly `e32m8`) | 64 | 3,242,023 | 2,004,708 | 5,246,731 | 31,323 | 81,980 | 0.000026 | 0.461186 | 0 / 65,536 | PASS |
-| `GENV256D128` (bit reversal `e32m1`, butterfly `e32m8`) | 64 | 3,195,854 | 1,256,358 | 4,452,212 | 19,630 | 69,565 | 0.000026 | 0.461186 | 0 / 65,536 | PASS |
-| `GENVV512D128` (bit reversal `e32m1`, butterfly `e32m8`) | 64 | 3,190,110 | 1,179,164 | 4,369,274 | 18,424 | 68,269 | 0.000026 | 0.461186 | 0 / 65,536 | PASS |
-| `LGVV128D128` (bit reversal `e32m1`, butterfly `e32m8`) | 64 | 3,192,459 | 1,422,060 | 4,614,519 | 22,219 | 72,101 | 0.000026 | 0.461186 | 0 / 65,536 | PASS |
-| `LGVV256D128` (bit reversal `e32m1`, butterfly `e32m8`) | 64 | 3,194,513 | 1,198,946 | 4,393,459 | 18,733 | 68,647 | 0.000026 | 0.461186 | 0 / 65,536 | PASS |
-| `LGVV512D128` (bit reversal `e32m1`, butterfly `e32m8`) | 64 | 3,192,232 | 1,119,913 | 4,312,145 | 17,498 | 67,377 | 0.000026 | 0.461186 | 0 / 65,536 | PASS |
+Both implementations process 64 independent 1024-point FFTs and pass all
+65,536 complex-point checks. The kernel comparison excludes plan and input
+layout costs; the reused-plan comparison includes input layout; the first-run
+comparison additionally includes allocation and twiddle initialization.
 
-### Speedup over scalar CPU
+### Genesys2 speedup over scalar CPU
 
-The speedup baseline is the 50 MHz Genesys2 scalar CPU cold-cache result from
-`testbench/fft_cpu`: 60,753,733 cycles for 64 FFTs, or 949,277 cycles per FFT.
-All compared CPU and RVV runs passed with zero mismatches out of 65,536 complex
-points. Kernel speedup excludes the RVV-only matrix reorder; end-to-end speedup
-uses `total cycles/FFT` and therefore includes that reorder cost.
+The scalar CPU baseline is the matching 50 MHz Genesys2 cold-cache row in the
+main table above.
 
 `Max component error` and `Max tolerance ratio` depend on the operator sequence
 used by each implementation. Separate multiply/add operations, fused
@@ -227,21 +278,20 @@ $$
 S_{\mathrm{kernel}}
 =\frac{C_{\mathrm{CPU/FFT}}}{C_{\mathrm{RVV\ kernel/FFT}}},
 \qquad
-S_{\mathrm{layout+FFT}}
-=\frac{C_{\mathrm{CPU/FFT}}}{C_{\mathrm{RVV\ total/FFT}}}.
+S_{\mathrm{reused}}
+=\frac{C_{\mathrm{CPU/FFT}}}{C_{\mathrm{RVV\ reused/FFT}}},
+\qquad
+S_{\mathrm{first}}
+=\frac{C_{\mathrm{CPU/FFT}}}{C_{\mathrm{RVV\ first/FFT}}}.
 $$
 
-| RVV configuration | RVV FFT cycles/FFT | RVV total cycles/FFT | Kernel speedup vs CPU | End-to-end speedup vs CPU |
-| --- | ---: | ---: | ---: | ---: |
-| `GENV128D64` | 34,327 | 84,979 | 27.65x | 11.17x |
-| `GENV128D128` | 22,781 | 72,646 | 41.67x | 13.07x |
-| `GENV256D64` | 31,323 | 81,980 | 30.31x | 11.58x |
-| `GENV256D128` | 19,630 | 69,565 | 48.36x | 13.65x |
-| `GENVV512D128` | 18,424 | 68,269 | 51.52x | 13.90x |
-| `LGVV128D128` | 22,219 | 72,101 | 42.72x | 13.17x |
-| `LGVV256D128` | 18,733 | 68,647 | 50.67x | 13.83x |
-| `LGVV512D128` | 17,498 | 67,377 | 54.25x | 14.09x |
-
-The passing m4 and m8 butterflies rule out a general high-LMUL floating-point
-pipeline failure. The `e32m1` bit-reversal form is retained for FPGA
-compatibility and deterministic validation.
+| RVV configuration | FFT cycles/FFT | Reused cycles/FFT | First-run cycles/FFT | Kernel speedup | Reused-plan speedup | First-run speedup |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `GENV128D64` | 33,267 | 41,771 | 44,445 | 5.99x | 5.06x | 4.81x |
+| `GENV128D128` | 20,461 | 28,991 | 31,664 | 9.74x | 7.29x | 6.76x |
+| `GENV256D64` | 31,768 | 40,264 | 42,943 | 6.28x | 5.25x | 4.98x |
+| `GENV256D128` | 18,371 | 26,894 | 29,570 | 10.85x | 7.86x | 7.23x |
+| `GENV512D64` | 17,348 | 25,872 | 28,550 | 11.49x | 8.17x | 7.49x |
+| `LGVV128D128` | 19,948 | 28,489 | 31,163 | 9.99x | 7.42x | 6.86x |
+| `LGVV256D128` | 17,750 | 26,276 | 28,952 | 11.23x | 8.04x | 7.39x |
+| `LGVV512D128` | 16,628 | 25,169 | 27,843 | 11.99x | 8.39x | 7.68x |
