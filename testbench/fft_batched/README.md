@@ -3,18 +3,28 @@
 This testbench runs 64 independent 1024-point FP32 radix-2 FFTs. Every batch
 uses the same input and NumPy ground truth as `testbench/fft`.
 
-The original batch-major input `[batch][bin]` is transposed in a measured
-preprocessing step into `[bin][batch]`. RVV operations then span the batch
-dimension, providing parallel work even during the early FFT stages.
+The batch-major input `[batch][bin]` is transposed in a measured preprocessing
+step into `[bin][batch]`. Each radix-2 butterfly uses scalar real/imaginary
+twiddle factors and LMUL=m8 vectors spanning independent batches. The
+butterfly is isolated in `butterfly_rvv_f32()` and written entirely with RVV
+intrinsics. Twiddle-factor generation is isolated in `twiddle_f32()` so the
+stage loop only describes index pairing and butterfly execution. Compiler-only
+fences preserve the intended vector-load to
+floating-point element-group chaining order without emitting target
+instructions.
 
-The four batch-major and bin-major working arrays are explicitly aligned to
-64-byte boundaries. Since one row in the bin-major layout is 64 FP32 values
-(256 bytes), every row remains 64-byte aligned for RVV loads and stores.
+The stage loop computes each `(stage, offset)` twiddle only once and reuses it
+across all blocks. The `offset == 0` case uses `butterfly_unity_rvv_f32()`,
+which replaces multiplication by `1 + 0j` with vector add/sub operations.
+
+The input and working arrays are explicitly aligned to 64-byte boundaries.
+Memory reordering is measured separately from FFT execution.
 
 Before entering the measured regions, the testbench rejects NaN/Inf inputs and
 checks the conservative FP32 component bound
-`FFT_SIZE * max(abs(real) + abs(imag)) <= FLT_MAX`. Each strip-mined loop also
-rejects a zero VL or a VL larger than the remaining batch count. Validation
+`FFT_SIZE * max(abs(real) + abs(imag)) <= FLT_MAX`. Each output-bin
+strip-mined loop also rejects a zero VL or a VL larger than the remaining bin
+count. Validation
 counts NaN/Inf outputs explicitly, so non-finite arithmetic cannot silently
 bypass the normal tolerance comparisons. These checks distinguish arithmetic
 overflow and invalid VL behavior from finite-but-incorrect hardware results.
@@ -36,6 +46,10 @@ spike --isa=rv64gcv_zicntr_zihpm_zvbb_zvl128b_zve64d \
 ```
 
 ## Performance results
+
+The recorded results below use the earlier LMUL=m4 butterfly kernel. New
+LMUL=m8 measurements should be recorded separately rather than compared as if
+they came from the current binary.
 
 The result below is a single Spike run with 64 identical 1024-point FP32 FFTs.
 All batches passed with maximum component error `0.000024` at batch 0 bin 757
