@@ -62,7 +62,7 @@ independent non-unity butterflies from the same FFT stage. Their eight twiddle
 matrices form one $16\times16$ block-diagonal matrix:
 
 $$
-W_{tile}=\operatorname{diag}(W_0,W_1,\ldots,W_7),\qquad
+W_{tile}=\mathrm{diag}(W_0,W_1,\ldots,W_7),\qquad
 W_k=\begin{bmatrix}w_{k,r}&-w_{k,i}\\w_{k,i}&w_{k,r}\end{bmatrix}.
 $$
 
@@ -97,12 +97,12 @@ uses the same two-step Q7 arithmetic as the CPU and RVV implementations:
 
 $$
 \begin{aligned}
-\hat{t}_r &= \operatorname{sat}_{\mathrm{int8}}
-  \left(\operatorname{RNU}\left(\frac{Y_r}{2^7}\right)\right), \\
-\hat{t}_i &= \operatorname{sat}_{\mathrm{int8}}
-  \left(\operatorname{RNU}\left(\frac{Y_i}{2^7}\right)\right), \\
-u &= \operatorname{RNU}\left(\frac{a+\hat{t}}{2}\right), \\
-l &= \operatorname{RNU}\left(\frac{a-\hat{t}}{2}\right).
+\hat{t}_r &= \mathrm{sat}_{\mathrm{int8}}
+  \left(\mathrm{RNU}\left(\frac{Y_r}{2^7}\right)\right), \\
+\hat{t}_i &= \mathrm{sat}_{\mathrm{int8}}
+  \left(\mathrm{RNU}\left(\frac{Y_i}{2^7}\right)\right), \\
+u &= \mathrm{RNU}\left(\frac{a+\hat{t}}{2}\right), \\
+l &= \mathrm{RNU}\left(\frac{a-\hat{t}}{2}\right).
 \end{aligned}
 $$
 

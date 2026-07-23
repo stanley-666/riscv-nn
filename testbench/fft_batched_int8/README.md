@@ -10,17 +10,17 @@ $1/N$ and cannot overflow merely because a butterfly adds two Q7 values.
 For odd input $o=o_r+j o_i$ and Q7 twiddle $W=W_r+jW_i$, the rotated value is
 
 $$
-t_r=\operatorname{sat}_{8}\!\left(
-  \operatorname{RNU}\frac{o_rW_r-o_iW_i}{2^7}\right),\qquad
-t_i=\operatorname{sat}_{8}\!\left(
-  \operatorname{RNU}\frac{o_iW_r+o_rW_i}{2^7}\right).
+t_r=\mathrm{sat}_{8}\!\left(
+  \mathrm{RNU}\frac{o_rW_r-o_iW_i}{2^7}\right),\qquad
+t_i=\mathrm{sat}_{8}\!\left(
+  \mathrm{RNU}\frac{o_iW_r+o_rW_i}{2^7}\right).
 $$
 
 The scaled butterfly is
 
 $$
-y_{\mathrm{upper}}=\operatorname{RNU}\frac{e+t}{2},\qquad
-y_{\mathrm{lower}}=\operatorname{RNU}\frac{e-t}{2}.
+y_{\mathrm{upper}}=\mathrm{RNU}\frac{e+t}{2},\qquad
+y_{\mathrm{lower}}=\mathrm{RNU}\frac{e-t}{2}.
 $$
 
 `RNU` is the RVV round-to-nearest-up mode. The unity-twiddle path bypasses the

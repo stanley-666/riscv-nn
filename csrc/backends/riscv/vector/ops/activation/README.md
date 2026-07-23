@@ -21,7 +21,7 @@ $$
 ### ReLU
 
 $$
-\operatorname{ReLU}(x) = \max(0,x)
+\mathrm{ReLU}(x) = \max(0,x)
 =
 \begin{cases}
 x, & x > 0,\\
@@ -34,7 +34,7 @@ $$
 This project fixes the negative slope at $\alpha=0.01$:
 
 $$
-\operatorname{LeakyReLU}(x) =
+\mathrm{LeakyReLU}(x) =
 \begin{cases}
 x, & x > 0,\\
 0.01x, & x \le 0.
@@ -68,8 +68,8 @@ This project uses the exact error-function form rather than the common tanh
 approximation:
 
 $$
-\operatorname{GELU}(x)
-=\frac{x}{2}\left(1+\operatorname{erf}\left(\frac{x}{\sqrt{2}}\right)\right).
+\mathrm{GELU}(x)
+=\frac{x}{2}\left(1+\mathrm{erf}\left(\frac{x}{\sqrt{2}}\right)\right).
 $$
 
 In the implementation, $1/\sqrt{2}$ is represented by
@@ -80,7 +80,7 @@ In the implementation, $1/\sqrt{2}$ is represented by
 For a vector $x=(x_0,\ldots,x_{L-1})$, Softmax is
 
 $$
-\operatorname{softmax}(x)_i
+\mathrm{softmax}(x)_i
 =\frac{e^{x_i-m}}{\sum_{j=0}^{L-1}e^{x_j-m}},
 \qquad
 m=\max_j x_j.
