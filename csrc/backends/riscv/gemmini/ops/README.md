@@ -18,10 +18,32 @@ Apache-2.0 code.
 
 The `ops/bareMetalC/` directory contains generated model headers, including
 the latest per-tensor metadata and native HWIO convolution weights.
-The executable inference entry lives in `testbench/sentence_gemmini/`, so the
-backend is not responsible for a particular program entry point.
+Executable entries live in `testbench/sentence_gemmini/` and
+`testbench/fft_batched_int8_gemmini/`, so the backend is not responsible for a
+particular program entry point.
 The low-level headers are maintained once in this backend and must not be
 duplicated elsewhere.
+
+## Build and simulation environment
+
+Gemmini programs use RV64GC host code plus the Gemmini RoCC extension. They do
+not use an RVV profile. Load Chipyard before configuring Linux/pk targets:
+
+```sh
+source ~/chipyard_1.13.0/chipyard/env.sh
+./scripts/configure_build.sh linux-pk gemmini sentence_gemmini default
+./scripts/configure_build.sh linux-pk gemmini fft_batched_int8_gemmini default
+```
+
+Run either ELF with `spike --isa=rv64gc_zicntr_zihpm
+--extension=gemmini`, the Chipyard `pk`, and its path under
+`build/linux-pk/<testbench>/default/gemmini/static/`. Bare-metal builds use the
+`GEMMINI` profile and `/opt/riscv_baremetal_medany`:
+
+```sh
+./scripts/configure_build.sh baremetal gemmini sentence_gemmini GEMMINI
+./scripts/configure_build.sh baremetal gemmini fft_batched_int8_gemmini GEMMINI
+```
 
 ## Current common API
 

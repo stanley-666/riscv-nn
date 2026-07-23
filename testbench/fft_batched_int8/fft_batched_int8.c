@@ -13,6 +13,8 @@
 #include "fft_int8_vectors.h"
 #include "nn_runtime.h"
 
+#define FFT_INT8_BENCHMARK_RUNS 10u
+
 #define FFT_INT8_BATCH_COUNT 64
 #define FFT_INT8_MAX_MISMATCH_REPORTS 64
 
@@ -183,6 +185,66 @@ static inline void butterfly_q7(int8_t *restrict even_real,
     __riscv_vse8_v_i8m2(odd_imag, lower_i, vl);
 }
 
+/* The variant name is the LMUL of the i32 accumulation result.  Widening
+ * keeps the same number of lanes: e8,mf2 -> e16,m1 -> e32,m2 and
+ * e8,m1 -> e16,m2 -> e32,m4.  The existing e8,m2 path produces e32,m8. */
+#define DEFINE_Q7_BUTTERFLY(NAME, T8, T16, T32, LOAD8, WMUL16, SEXT32, \
+                            SUB32, ADD32, NCLIP16, NCLIP8, VAADD8, VASUB8, \
+                            STORE8) \
+static inline void butterfly_q7_##NAME(int8_t *restrict erp, \
+    int8_t *restrict eip, int8_t *restrict orp, int8_t *restrict oip, \
+    int8_t wr, int8_t wi, size_t vl) \
+{ \
+    T8 or_ = LOAD8(orp, vl); \
+    T8 oi = LOAD8(oip, vl); \
+    T16 p16 = WMUL16(or_, wr, vl); \
+    T16 q16 = WMUL16(oi, wi, vl); \
+    T32 p32 = SEXT32(p16, vl); \
+    T32 q32 = SEXT32(q16, vl); \
+    p32 = SUB32(p32, q32, vl); \
+    p16 = NCLIP16(p32, 7, __RISCV_VXRM_RNU, vl); \
+    T8 tr = NCLIP8(p16, 0, __RISCV_VXRM_RNU, vl); \
+    p16 = WMUL16(oi, wr, vl); \
+    q16 = WMUL16(or_, wi, vl); \
+    p32 = SEXT32(p16, vl); \
+    q32 = SEXT32(q16, vl); \
+    p32 = ADD32(p32, q32, vl); \
+    p16 = NCLIP16(p32, 7, __RISCV_VXRM_RNU, vl); \
+    T8 ti = NCLIP8(p16, 0, __RISCV_VXRM_RNU, vl); \
+    T8 er = LOAD8(erp, vl); \
+    T8 ur = VAADD8(er, tr, __RISCV_VXRM_RNU, vl); \
+    T8 lr = VASUB8(er, tr, __RISCV_VXRM_RNU, vl); \
+    STORE8(erp, ur, vl); STORE8(orp, lr, vl); \
+    T8 ei = LOAD8(eip, vl); \
+    T8 ui = VAADD8(ei, ti, __RISCV_VXRM_RNU, vl); \
+    T8 li = VASUB8(ei, ti, __RISCV_VXRM_RNU, vl); \
+    STORE8(eip, ui, vl); STORE8(oip, li, vl); \
+} \
+static inline void butterfly_unity_q7_##NAME(int8_t *restrict erp, \
+    int8_t *restrict eip, int8_t *restrict orp, int8_t *restrict oip, \
+    size_t vl) \
+{ \
+    T8 or_ = LOAD8(orp, vl); T8 er = LOAD8(erp, vl); \
+    T8 ur = VAADD8(er, or_, __RISCV_VXRM_RNU, vl); \
+    T8 lr = VASUB8(er, or_, __RISCV_VXRM_RNU, vl); \
+    STORE8(erp, ur, vl); STORE8(orp, lr, vl); \
+    T8 oi = LOAD8(oip, vl); T8 ei = LOAD8(eip, vl); \
+    T8 ui = VAADD8(ei, oi, __RISCV_VXRM_RNU, vl); \
+    T8 li = VASUB8(ei, oi, __RISCV_VXRM_RNU, vl); \
+    STORE8(eip, ui, vl); STORE8(oip, li, vl); \
+}
+
+DEFINE_Q7_BUTTERFLY(m2, vint8mf2_t, vint16m1_t, vint32m2_t,
+    __riscv_vle8_v_i8mf2, __riscv_vwmul_vx_i16m1, __riscv_vsext_vf2_i32m2,
+    __riscv_vsub_vv_i32m2, __riscv_vadd_vv_i32m2,
+    __riscv_vnclip_wx_i16m1, __riscv_vnclip_wx_i8mf2,
+    __riscv_vaadd_vv_i8mf2, __riscv_vasub_vv_i8mf2, __riscv_vse8_v_i8mf2)
+DEFINE_Q7_BUTTERFLY(m4, vint8m1_t, vint16m2_t, vint32m4_t,
+    __riscv_vle8_v_i8m1, __riscv_vwmul_vx_i16m2, __riscv_vsext_vf2_i32m4,
+    __riscv_vsub_vv_i32m4, __riscv_vadd_vv_i32m4,
+    __riscv_vnclip_wx_i16m2, __riscv_vnclip_wx_i8m1,
+    __riscv_vaadd_vv_i8m1, __riscv_vasub_vv_i8m1, __riscv_vse8_v_i8m1)
+
 static inline void butterfly_unity_q7(int8_t *restrict even_real,
                                       int8_t *restrict even_imag,
                                       int8_t *restrict odd_real,
@@ -204,7 +266,7 @@ static inline void butterfly_unity_q7(int8_t *restrict even_real,
     __riscv_vse8_v_i8m2(odd_imag, lower_i, vl);
 }
 
-static int fft_batched_rvv_q7(const fft_plan_q7_t *plan)
+static void fft_bit_reverse_rvv_q7(const fft_plan_q7_t *plan)
 {
     for (size_t index = 0; index < plan->size; ++index) {
         size_t reversed = reverse_bits((unsigned)index, plan->stage_count);
@@ -215,50 +277,321 @@ static int fft_batched_rvv_q7(const fft_plan_q7_t *plan)
                        &plan->data_real[b], &plan->data_imag[b],
                        plan->batch_count);
     }
+}
 
-    size_t vlmax = __riscv_vsetvlmax_e8m2();
-    if (vlmax == 0) return 0;
+static inline void butterfly_batches_q7(int8_t *even_real,
+                                         int8_t *even_imag,
+                                         int8_t *odd_real,
+                                         int8_t *odd_imag,
+                                         int8_t wr,
+                                         int8_t wi,
+                                         size_t batch_count,
+                                         size_t vl)
+{
+    size_t batch = 0;
+    for (; batch_count - batch >= vl; batch += vl) {
+        butterfly_q7(even_real + batch, even_imag + batch,
+                     odd_real + batch, odd_imag + batch, wr, wi, vl);
+    }
+    if (batch < batch_count) {
+        size_t tail_vl = __riscv_vsetvl_e8m2(batch_count - batch);
+        butterfly_q7(even_real + batch, even_imag + batch,
+                     odd_real + batch, odd_imag + batch, wr, wi, tail_vl);
+    }
+}
+
+static inline void butterfly_unity_batches_q7(int8_t *even_real,
+                                               int8_t *even_imag,
+                                               int8_t *odd_real,
+                                               int8_t *odd_imag,
+                                               size_t batch_count,
+                                               size_t vl)
+{
+    size_t batch = 0;
+    for (; batch_count - batch >= vl; batch += vl) {
+        butterfly_unity_q7(even_real + batch, even_imag + batch,
+                           odd_real + batch, odd_imag + batch, vl);
+    }
+    if (batch < batch_count) {
+        size_t tail_vl = __riscv_vsetvl_e8m2(batch_count - batch);
+        butterfly_unity_q7(even_real + batch, even_imag + batch,
+                           odd_real + batch, odd_imag + batch, tail_vl);
+    }
+}
+
+static int fft_butterflies_rvv_q7(const fft_plan_q7_t *plan)
+{
+    size_t vl = __riscv_vsetvl_e8m2(plan->batch_count);
+    if (vl == 0) return 0;
+
     for (size_t block_size = 2; block_size <= plan->size; block_size <<= 1) {
         size_t half = block_size >> 1;
         size_t stage_base = half - 1;
-        for (size_t offset = 0; offset < half; ++offset) {
+
+        /* The unity twiddle is a separate loop so the block/batch hot loops
+         * contain no offset==0 branch. */
+        for (size_t block = 0; block < plan->size; block += block_size) {
+            size_t even_base = data_offset(plan, block, 0);
+            size_t odd_base = data_offset(plan, block + half, 0);
+            butterfly_unity_batches_q7(
+                &plan->data_real[even_base], &plan->data_imag[even_base],
+                &plan->data_real[odd_base], &plan->data_imag[odd_base],
+                plan->batch_count, vl);
+        }
+
+        for (size_t offset = 1; offset < half; ++offset) {
             int8_t wr = plan->twiddle_real[stage_base + offset];
             int8_t wi = plan->twiddle_imag[stage_base + offset];
             for (size_t block = 0; block < plan->size; block += block_size) {
                 size_t even_base = data_offset(plan, block + offset, 0);
                 size_t odd_base = data_offset(plan, block + offset + half, 0);
-                size_t batch = 0;
-                for (; plan->batch_count - batch >= vlmax; batch += vlmax) {
-                    if (offset == 0) {
-                        butterfly_unity_q7(&plan->data_real[even_base + batch],
-                            &plan->data_imag[even_base + batch],
-                            &plan->data_real[odd_base + batch],
-                            &plan->data_imag[odd_base + batch], vlmax);
-                    } else {
-                        butterfly_q7(&plan->data_real[even_base + batch],
-                            &plan->data_imag[even_base + batch],
-                            &plan->data_real[odd_base + batch],
-                            &plan->data_imag[odd_base + batch], wr, wi, vlmax);
-                    }
-                }
-                if (batch < plan->batch_count) {
-                    size_t vl = __riscv_vsetvl_e8m2(plan->batch_count - batch);
-                    if (offset == 0) {
-                        butterfly_unity_q7(&plan->data_real[even_base + batch],
-                            &plan->data_imag[even_base + batch],
-                            &plan->data_real[odd_base + batch],
-                            &plan->data_imag[odd_base + batch], vl);
-                    } else {
-                        butterfly_q7(&plan->data_real[even_base + batch],
-                            &plan->data_imag[even_base + batch],
-                            &plan->data_real[odd_base + batch],
-                            &plan->data_imag[odd_base + batch], wr, wi, vl);
-                    }
-                }
+                butterfly_batches_q7(
+                    &plan->data_real[even_base], &plan->data_imag[even_base],
+                    &plan->data_real[odd_base], &plan->data_imag[odd_base],
+                    wr, wi, plan->batch_count, vl);
             }
         }
     }
     return 1;
+}
+
+#define DEFINE_Q7_FFT_VARIANT(NAME, SETVL) \
+static int fft_butterflies_q7_##NAME(const fft_plan_q7_t *plan) \
+{ \
+    size_t full_vl = SETVL(plan->batch_count); \
+    if (full_vl == 0) return 0; \
+    for (size_t block_size = 2; block_size <= plan->size; block_size <<= 1) { \
+        size_t half = block_size >> 1; \
+        size_t stage_base = half - 1; \
+        for (size_t block = 0; block < plan->size; block += block_size) { \
+            size_t e = data_offset(plan, block, 0); \
+            size_t o = data_offset(plan, block + half, 0); \
+            for (size_t batch = 0; batch < plan->batch_count;) { \
+                size_t vl = SETVL(plan->batch_count - batch); \
+                butterfly_unity_q7_##NAME(&plan->data_real[e + batch], \
+                    &plan->data_imag[e + batch], &plan->data_real[o + batch], \
+                    &plan->data_imag[o + batch], vl); \
+                batch += vl; \
+            } \
+        } \
+        for (size_t offset = 1; offset < half; ++offset) { \
+            int8_t wr = plan->twiddle_real[stage_base + offset]; \
+            int8_t wi = plan->twiddle_imag[stage_base + offset]; \
+            for (size_t block = 0; block < plan->size; block += block_size) { \
+                size_t e = data_offset(plan, block + offset, 0); \
+                size_t o = data_offset(plan, block + offset + half, 0); \
+                for (size_t batch = 0; batch < plan->batch_count;) { \
+                    size_t vl = SETVL(plan->batch_count - batch); \
+                    butterfly_q7_##NAME(&plan->data_real[e + batch], \
+                        &plan->data_imag[e + batch], &plan->data_real[o + batch], \
+                        &plan->data_imag[o + batch], wr, wi, vl); \
+                    batch += vl; \
+                } \
+            } \
+        } \
+    } \
+    return 1; \
+}
+
+DEFINE_Q7_FFT_VARIANT(m2, __riscv_vsetvl_e8mf2)
+DEFINE_Q7_FFT_VARIANT(m4, __riscv_vsetvl_e8m1)
+
+#define DEFINE_Q7_STAGE_FUSED_VARIANT(NAME, T8, T16, T32, LOAD8, WMUL16, \
+    SEXT32, SUB32, ADD32, NCLIP16, NCLIP8, VAADD8, VASUB8, STORE8, SETVL) \
+static inline void butterfly_two_stages_q7_##NAME( \
+    int8_t *r0p, int8_t *i0p, int8_t *r1p, int8_t *i1p, \
+    int8_t *r2p, int8_t *i2p, int8_t *r3p, int8_t *i3p, \
+    int8_t ar, int8_t ai, int8_t b0r, int8_t b0i, \
+    int8_t b1r, int8_t b1i, int unity, size_t vl) \
+{ \
+    T8 r0 = LOAD8(r0p, vl), i0 = LOAD8(i0p, vl); \
+    T8 r1 = LOAD8(r1p, vl), i1 = LOAD8(i1p, vl); \
+    T8 r2 = LOAD8(r2p, vl), i2 = LOAD8(i2p, vl); \
+    T8 r3 = LOAD8(r3p, vl), i3 = LOAD8(i3p, vl); \
+    T8 y0r, y0i, y1r, y1i, y2r, y2i, y3r, y3i; \
+    if (unity) { \
+        y0r = VAADD8(r0, r1, __RISCV_VXRM_RNU, vl); \
+        y1r = VASUB8(r0, r1, __RISCV_VXRM_RNU, vl); \
+        y0i = VAADD8(i0, i1, __RISCV_VXRM_RNU, vl); \
+        y1i = VASUB8(i0, i1, __RISCV_VXRM_RNU, vl); \
+        y2r = VAADD8(r2, r3, __RISCV_VXRM_RNU, vl); \
+        y3r = VASUB8(r2, r3, __RISCV_VXRM_RNU, vl); \
+        y2i = VAADD8(i2, i3, __RISCV_VXRM_RNU, vl); \
+        y3i = VASUB8(i2, i3, __RISCV_VXRM_RNU, vl); \
+    } else { \
+        T16 p16 = WMUL16(r1, ar, vl), q16 = WMUL16(i1, ai, vl); \
+        T32 p32 = SEXT32(p16, vl), q32 = SEXT32(q16, vl); \
+        p32 = SUB32(p32, q32, vl); \
+        p16 = NCLIP16(p32, 7, __RISCV_VXRM_RNU, vl); \
+        T8 t1r = NCLIP8(p16, 0, __RISCV_VXRM_RNU, vl); \
+        p16 = WMUL16(i1, ar, vl); q16 = WMUL16(r1, ai, vl); \
+        p32 = SEXT32(p16, vl); q32 = SEXT32(q16, vl); \
+        p32 = ADD32(p32, q32, vl); \
+        p16 = NCLIP16(p32, 7, __RISCV_VXRM_RNU, vl); \
+        T8 t1i = NCLIP8(p16, 0, __RISCV_VXRM_RNU, vl); \
+        p16 = WMUL16(r3, ar, vl); q16 = WMUL16(i3, ai, vl); \
+        p32 = SEXT32(p16, vl); q32 = SEXT32(q16, vl); \
+        p32 = SUB32(p32, q32, vl); \
+        p16 = NCLIP16(p32, 7, __RISCV_VXRM_RNU, vl); \
+        T8 t3r = NCLIP8(p16, 0, __RISCV_VXRM_RNU, vl); \
+        p16 = WMUL16(i3, ar, vl); q16 = WMUL16(r3, ai, vl); \
+        p32 = SEXT32(p16, vl); q32 = SEXT32(q16, vl); \
+        p32 = ADD32(p32, q32, vl); \
+        p16 = NCLIP16(p32, 7, __RISCV_VXRM_RNU, vl); \
+        T8 t3i = NCLIP8(p16, 0, __RISCV_VXRM_RNU, vl); \
+        y0r = VAADD8(r0, t1r, __RISCV_VXRM_RNU, vl); \
+        y1r = VASUB8(r0, t1r, __RISCV_VXRM_RNU, vl); \
+        y0i = VAADD8(i0, t1i, __RISCV_VXRM_RNU, vl); \
+        y1i = VASUB8(i0, t1i, __RISCV_VXRM_RNU, vl); \
+        y2r = VAADD8(r2, t3r, __RISCV_VXRM_RNU, vl); \
+        y3r = VASUB8(r2, t3r, __RISCV_VXRM_RNU, vl); \
+        y2i = VAADD8(i2, t3i, __RISCV_VXRM_RNU, vl); \
+        y3i = VASUB8(i2, t3i, __RISCV_VXRM_RNU, vl); \
+    } \
+    T8 q0r, q0i; \
+    if (unity) { \
+        q0r = y2r; q0i = y2i; \
+    } else { \
+        T16 p16 = WMUL16(y2r, b0r, vl), q16 = WMUL16(y2i, b0i, vl); \
+        T32 p32 = SEXT32(p16, vl), q32 = SEXT32(q16, vl); \
+        p32 = SUB32(p32, q32, vl); \
+        p16 = NCLIP16(p32, 7, __RISCV_VXRM_RNU, vl); \
+        q0r = NCLIP8(p16, 0, __RISCV_VXRM_RNU, vl); \
+        p16 = WMUL16(y2i, b0r, vl); q16 = WMUL16(y2r, b0i, vl); \
+        p32 = SEXT32(p16, vl); q32 = SEXT32(q16, vl); \
+        p32 = ADD32(p32, q32, vl); \
+        p16 = NCLIP16(p32, 7, __RISCV_VXRM_RNU, vl); \
+        q0i = NCLIP8(p16, 0, __RISCV_VXRM_RNU, vl); \
+    } \
+    T16 p16 = WMUL16(y3r, b1r, vl), q16 = WMUL16(y3i, b1i, vl); \
+    T32 p32 = SEXT32(p16, vl), q32 = SEXT32(q16, vl); \
+    p32 = SUB32(p32, q32, vl); \
+    p16 = NCLIP16(p32, 7, __RISCV_VXRM_RNU, vl); \
+    T8 q1r = NCLIP8(p16, 0, __RISCV_VXRM_RNU, vl); \
+    p16 = WMUL16(y3i, b1r, vl); q16 = WMUL16(y3r, b1i, vl); \
+    p32 = SEXT32(p16, vl); q32 = SEXT32(q16, vl); \
+    p32 = ADD32(p32, q32, vl); \
+    p16 = NCLIP16(p32, 7, __RISCV_VXRM_RNU, vl); \
+    T8 q1i = NCLIP8(p16, 0, __RISCV_VXRM_RNU, vl); \
+    T8 z0r = VAADD8(y0r, q0r, __RISCV_VXRM_RNU, vl); \
+    T8 z2r = VASUB8(y0r, q0r, __RISCV_VXRM_RNU, vl); \
+    T8 z0i = VAADD8(y0i, q0i, __RISCV_VXRM_RNU, vl); \
+    T8 z2i = VASUB8(y0i, q0i, __RISCV_VXRM_RNU, vl); \
+    T8 z1r = VAADD8(y1r, q1r, __RISCV_VXRM_RNU, vl); \
+    T8 z3r = VASUB8(y1r, q1r, __RISCV_VXRM_RNU, vl); \
+    T8 z1i = VAADD8(y1i, q1i, __RISCV_VXRM_RNU, vl); \
+    T8 z3i = VASUB8(y1i, q1i, __RISCV_VXRM_RNU, vl); \
+    STORE8(r0p, z0r, vl); STORE8(i0p, z0i, vl); \
+    STORE8(r1p, z1r, vl); STORE8(i1p, z1i, vl); \
+    STORE8(r2p, z2r, vl); STORE8(i2p, z2i, vl); \
+    STORE8(r3p, z3r, vl); STORE8(i3p, z3i, vl); \
+} \
+static int fft_butterflies_q7_##NAME##_stage_fused( \
+    const fft_plan_q7_t *plan) \
+{ \
+    if ((plan->stage_count & 1u) != 0u) return 0; \
+    for (size_t bs = 2; bs <= plan->size; bs <<= 2) { \
+        size_t half = bs >> 1, next_bs = bs << 1; \
+        size_t stage_a = half - 1, stage_b = bs - 1; \
+        for (size_t block = 0; block < plan->size; block += next_bs) \
+            for (size_t off = 0; off < half; ++off) { \
+                int8_t ar = plan->twiddle_real[stage_a + off]; \
+                int8_t ai = plan->twiddle_imag[stage_a + off]; \
+                int8_t b0r = plan->twiddle_real[stage_b + off]; \
+                int8_t b0i = plan->twiddle_imag[stage_b + off]; \
+                int8_t b1r = plan->twiddle_real[stage_b + half + off]; \
+                int8_t b1i = plan->twiddle_imag[stage_b + half + off]; \
+                size_t b0 = block + off, b1 = b0 + half; \
+                size_t b2 = b0 + bs, b3 = b1 + bs; \
+                for (size_t batch = 0; batch < plan->batch_count;) { \
+                    size_t vl = SETVL(plan->batch_count - batch); \
+                    if (vl == 0) return 0; \
+                    size_t p0 = data_offset(plan, b0, batch); \
+                    size_t p1 = data_offset(plan, b1, batch); \
+                    size_t p2 = data_offset(plan, b2, batch); \
+                    size_t p3 = data_offset(plan, b3, batch); \
+                    butterfly_two_stages_q7_##NAME( \
+                        &plan->data_real[p0], &plan->data_imag[p0], \
+                        &plan->data_real[p1], &plan->data_imag[p1], \
+                        &plan->data_real[p2], &plan->data_imag[p2], \
+                        &plan->data_real[p3], &plan->data_imag[p3], \
+                        ar, ai, b0r, b0i, b1r, b1i, off == 0, vl); \
+                    batch += vl; \
+                } \
+            } \
+    } \
+    return 1; \
+}
+
+DEFINE_Q7_STAGE_FUSED_VARIANT(m2, vint8mf2_t, vint16m1_t, vint32m2_t,
+    __riscv_vle8_v_i8mf2, __riscv_vwmul_vx_i16m1,
+    __riscv_vsext_vf2_i32m2, __riscv_vsub_vv_i32m2,
+    __riscv_vadd_vv_i32m2, __riscv_vnclip_wx_i16m1,
+    __riscv_vnclip_wx_i8mf2, __riscv_vaadd_vv_i8mf2,
+    __riscv_vasub_vv_i8mf2, __riscv_vse8_v_i8mf2,
+    __riscv_vsetvl_e8mf2)
+DEFINE_Q7_STAGE_FUSED_VARIANT(m4, vint8m1_t, vint16m2_t, vint32m4_t,
+    __riscv_vle8_v_i8m1, __riscv_vwmul_vx_i16m2,
+    __riscv_vsext_vf2_i32m4, __riscv_vsub_vv_i32m4,
+    __riscv_vadd_vv_i32m4, __riscv_vnclip_wx_i16m2,
+    __riscv_vnclip_wx_i8m1, __riscv_vaadd_vv_i8m1,
+    __riscv_vasub_vv_i8m1, __riscv_vse8_v_i8m1,
+    __riscv_vsetvl_e8m1)
+DEFINE_Q7_STAGE_FUSED_VARIANT(m8, vint8m2_t, vint16m4_t, vint32m8_t,
+    __riscv_vle8_v_i8m2, __riscv_vwmul_vx_i16m4,
+    __riscv_vsext_vf2_i32m8, __riscv_vsub_vv_i32m8,
+    __riscv_vadd_vv_i32m8, __riscv_vnclip_wx_i16m4,
+    __riscv_vnclip_wx_i8m2, __riscv_vaadd_vv_i8m2,
+    __riscv_vasub_vv_i8m2, __riscv_vse8_v_i8m2,
+    __riscv_vsetvl_e8m2)
+
+typedef int (*fft_q7_function_t)(const fft_plan_q7_t *);
+
+static size_t count_mismatches_q7(const fft_plan_q7_t *plan)
+{
+    size_t mismatches = 0;
+    for (size_t bin = 0; bin < plan->size; ++bin)
+        for (size_t batch = 0; batch < plan->batch_count; ++batch) {
+            size_t pos = data_offset(plan, bin, batch);
+            if (plan->data_real[pos] != fft_int8_groundtruth_real[bin] ||
+                plan->data_imag[pos] != fft_int8_groundtruth_imag[bin])
+                ++mismatches;
+        }
+    return mismatches;
+}
+
+static int run_q7_variant(fft_plan_q7_t *plan, const char *name,
+                          fft_q7_function_t function)
+{
+    uint64_t layout = 0, reverse = 0, butterfly = 0;
+    int vl_ok = 1;
+    for (unsigned run = 0; run < FFT_INT8_BENCHMARK_RUNS; ++run) {
+        uint64_t begin = nn_runtime_read_cycles();
+        fft_plan_load_input_q7(plan);
+        uint64_t layout_end = nn_runtime_read_cycles();
+        fft_bit_reverse_rvv_q7(plan);
+        uint64_t reverse_end = nn_runtime_read_cycles();
+        vl_ok &= function(plan);
+        uint64_t end = nn_runtime_read_cycles();
+        layout += layout_end - begin;
+        reverse += reverse_end - layout_end;
+        butterfly += end - reverse_end;
+    }
+    layout /= FFT_INT8_BENCHMARK_RUNS;
+    reverse /= FFT_INT8_BENCHMARK_RUNS;
+    butterfly /= FFT_INT8_BENCHMARK_RUNS;
+    size_t mismatches = count_mismatches_q7(plan);
+    printf("\nRVV int8 variant: %s\nbenchmark runs: %u\n", name,
+        FFT_INT8_BENCHMARK_RUNS);
+    printf("average input layout cycles: "); print_u64_decimal(layout);
+    printf("\naverage bit reversal cycles: "); print_u64_decimal(reverse);
+    printf("\naverage butterfly cycles: "); print_u64_decimal(butterfly);
+    printf("\naverage FFT cycles: "); print_u64_decimal(reverse + butterfly);
+    printf("\nmismatched complex points: %u / %u\n", (unsigned)mismatches,
+        (unsigned)(plan->size * plan->batch_count));
+    printf("FFT int8 RVV %s: %s\n", name,
+        vl_ok && mismatches == 0 ? "PASS" : "FAIL");
+    return vl_ok && mismatches == 0;
 }
 
 int fft_batched_int8_testbench_run(void)
@@ -271,70 +604,30 @@ int fft_batched_int8_testbench_run(void)
         printf("FFT batched int8 RVV: FAIL (invalid plan)\n");
         return 1;
     }
-    uint64_t layout_start = nn_runtime_read_cycles();
-    fft_plan_load_input_q7(&plan);
-    uint64_t layout_end = nn_runtime_read_cycles();
-    uint64_t fft_start = nn_runtime_read_cycles();
-    int vl_ok = fft_batched_rvv_q7(&plan);
-    uint64_t fft_end = nn_runtime_read_cycles();
-
-    size_t mismatches = 0, reported = 0;
-    int max_error = 0;
-    size_t max_batch = 0, max_bin = 0;
-    for (size_t bin = 0; bin < plan.size; ++bin) {
-        for (size_t batch = 0; batch < plan.batch_count; ++batch) {
-            size_t pos = data_offset(&plan, bin, batch);
-            int dr = (int)plan.data_real[pos] - (int)fft_int8_groundtruth_real[bin];
-            int di = (int)plan.data_imag[pos] - (int)fft_int8_groundtruth_imag[bin];
-            int error = dr < 0 ? -dr : dr;
-            int imag_error = di < 0 ? -di : di;
-            if (imag_error > error) error = imag_error;
-            if (error > max_error) { max_error = error; max_batch = batch; max_bin = bin; }
-            if (dr != 0 || di != 0) {
-                ++mismatches;
-                if (reported < FFT_INT8_MAX_MISMATCH_REPORTS) {
-                    printf("mismatch batch %u bin %u: actual %d %dj expected %d %dj\n",
-                        (unsigned)batch, (unsigned)bin,
-                        (int)plan.data_real[pos], (int)plan.data_imag[pos],
-                        (int)fft_int8_groundtruth_real[bin],
-                        (int)fft_int8_groundtruth_imag[bin]);
-                    ++reported;
-                }
-            }
-        }
-    }
-
     uint64_t plan_cycles = plan_end - plan_start;
-    uint64_t layout_cycles = layout_end - layout_start;
-    uint64_t fft_cycles = fft_end - fft_start;
-    uint64_t reused_cycles = layout_cycles + fft_cycles;
-    uint64_t first_cycles = plan_cycles + reused_cycles;
     printf("FFT size: %u\nstages: %u\nbatches: %u\nscale: 1/%u\n",
         (unsigned)plan.size, plan.stage_count, (unsigned)plan.batch_count,
         (unsigned)plan.size);
     printf("twiddle plan cycles: "); print_u64_decimal(plan_cycles);
-    printf("\ninput layout cycles: "); print_u64_decimal(layout_cycles);
-    printf("\nFFT cycles: "); print_u64_decimal(fft_cycles);
-    printf("\nreused-plan total cycles: "); print_u64_decimal(reused_cycles);
-    printf("\nfirst-run total cycles: "); print_u64_decimal(first_cycles);
-    printf("\nFFT cycles per FFT: "); print_u64_decimal(fft_cycles / plan.batch_count);
-    printf("\nreused-plan cycles per FFT: "); print_u64_decimal(reused_cycles / plan.batch_count);
-    printf("\nfirst-run cycles per FFT: "); print_u64_decimal(first_cycles / plan.batch_count);
-    printf("\nmax component error: %d at batch %u bin %u\n", max_error,
-        (unsigned)max_batch, (unsigned)max_bin);
-    printf("mismatched complex points: %u / %u\n", (unsigned)mismatches,
-        (unsigned)(plan.size * plan.batch_count));
-    if (mismatches > reported) printf("mismatch report truncated: showed first %u of %u points\n",
-        (unsigned)reported, (unsigned)mismatches);
-
-    if (!vl_ok || mismatches != 0) {
-        printf("FFT batched int8 RVV: FAIL (bit-exact Q7 validation)\n");
-        fft_plan_destroy_q7(&plan);
-        return 1;
-    }
-    printf("FFT batched int8 RVV: PASS (bit-exact Q7 validation)\n");
+    printf("\n");
+    int m2_ok = run_q7_variant(&plan, "m2 accumulator",
+        fft_butterflies_q7_m2);
+    int m2_fused_ok = run_q7_variant(&plan, "m2 accumulator stage-fused",
+        fft_butterflies_q7_m2_stage_fused);
+    int m4_ok = run_q7_variant(&plan, "m4 accumulator",
+        fft_butterflies_q7_m4);
+    int m4_fused_ok = run_q7_variant(&plan, "m4 accumulator stage-fused",
+        fft_butterflies_q7_m4_stage_fused);
+    int m8_ok = run_q7_variant(&plan, "m8 accumulator",
+        fft_butterflies_rvv_q7);
+    int m8_fused_ok = run_q7_variant(&plan, "m8 accumulator stage-fused",
+        fft_butterflies_q7_m8_stage_fused);
+    int ok = m2_ok && m2_fused_ok && m4_ok && m4_fused_ok &&
+        m8_ok && m8_fused_ok;
+    printf("FFT batched int8 RVV: %s (bit-exact Q7 validation)\n",
+        ok ? "PASS" : "FAIL");
     fft_plan_destroy_q7(&plan);
-    return 0;
+    return ok ? 0 : 1;
 }
 
 #ifndef BAREMETAL

@@ -9,9 +9,9 @@ set(NN_SDCARD_BLOCK "34" CACHE STRING "SD-card destination block")
 set(NN_FLASH_CONFIRM "NO" CACHE STRING "Set YES to authorize SD-card write")
 
 if(NN_BACKEND STREQUAL "gemmini")
-  if(NOT NN_TESTBENCH STREQUAL "sentence_gemmini")
+  if(NOT NN_TESTBENCH MATCHES "^(sentence_gemmini|fft_batched_int8_gemmini)$")
     message(FATAL_ERROR
-      "Bare-metal NN_BACKEND=gemmini currently supports NN_TESTBENCH=sentence_gemmini")
+      "Bare-metal Gemmini supports sentence_gemmini and fft_batched_int8_gemmini")
   endif()
   if(NOT NN_HARDWARE_CONFIG STREQUAL "GEMMINI")
     message(FATAL_ERROR
@@ -20,59 +20,65 @@ if(NN_BACKEND STREQUAL "gemmini")
 
   file(GLOB NN_GEMMINI_MINILIB_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/baremetal/minilib/*.c")
+  set(NN_GEMMINI_TARGET "${NN_TESTBENCH}_baremetal")
   set(NN_GEMMINI_OUTPUT_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/build/baremetal/sentence_gemmini")
-  set(NN_GEMMINI_BASENAME "GEMMINI_nn_gemmini_baremetal")
+    "${CMAKE_CURRENT_SOURCE_DIR}/build/baremetal/${NN_TESTBENCH}")
+  if(NN_TESTBENCH STREQUAL "sentence_gemmini")
+    set(NN_GEMMINI_BASENAME "GEMMINI_nn_gemmini_baremetal")
+  else()
+    set(NN_GEMMINI_BASENAME "GEMMINI_${NN_TESTBENCH}_baremetal")
+  endif()
   set(NN_GEMMINI_ELF "${NN_GEMMINI_OUTPUT_DIR}/${NN_GEMMINI_BASENAME}.elf")
   set(NN_GEMMINI_BIN "${NN_GEMMINI_OUTPUT_DIR}/${NN_GEMMINI_BASENAME}.bin")
   set(NN_GEMMINI_DUMP "${NN_GEMMINI_OUTPUT_DIR}/${NN_GEMMINI_BASENAME}.dump")
   set(NN_GEMMINI_MAP "${NN_GEMMINI_OUTPUT_DIR}/${NN_GEMMINI_BASENAME}.map")
 
-  add_executable(sentence_gemmini_baremetal
-    testbench/sentence_gemmini/sentence_gemmini.c
+  add_executable(${NN_GEMMINI_TARGET}
+    testbench/${NN_TESTBENCH}/${NN_TESTBENCH}.c
     baremetal/syscalls.c
     ${NN_GEMMINI_MINILIB_SOURCES}
     baremetal/trap.c
     baremetal/start.S
     $<TARGET_OBJECTS:riscv_nn_gemmini_ops>)
-  target_include_directories(sentence_gemmini_baremetal PRIVATE
+  target_include_directories(${NN_GEMMINI_TARGET} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/baremetal/include"
-    "${CMAKE_CURRENT_SOURCE_DIR}/testbench/sentence_gemmini"
+    "${CMAKE_CURRENT_SOURCE_DIR}/testbench/${NN_TESTBENCH}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/testbench/fft_batched_int8"
     "${CMAKE_CURRENT_SOURCE_DIR}/csrc/backends/riscv/gemmini/ops"
     "${CMAKE_CURRENT_SOURCE_DIR}/header"
     "${CMAKE_CURRENT_SOURCE_DIR}/csrc/backends/riscv/gemmini/ops/bareMetalC")
-  target_include_directories(sentence_gemmini_baremetal SYSTEM PRIVATE
+  target_include_directories(${NN_GEMMINI_TARGET} SYSTEM PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/csrc/backends/riscv/gemmini/ops")
-  target_compile_definitions(sentence_gemmini_baremetal PRIVATE
+  target_compile_definitions(${NN_GEMMINI_TARGET} PRIVATE
     BAREMETAL=1 PREALLOCATE=1 MULTITHREAD=1 PRINT_TILE=0
     BAREMETAL_CPU_HZ=${NN_BAREMETAL_CPU_HZ}
     NN_BACKEND_CPU=0 NN_BACKEND_VECTOR=0 NN_BACKEND_GEMMINI=1)
-  target_compile_options(sentence_gemmini_baremetal PRIVATE
+  target_compile_options(${NN_GEMMINI_TARGET} PRIVATE
     -O3 -ffast-math -march=rv64gc -mabi=lp64d -mcmodel=medany
     -ffreestanding -msmall-data-limit=0 -fno-common
     -fno-builtin-printf -fno-tree-loop-distribute-patterns
     -fno-tree-vectorize -fno-tree-slp-vectorize -nostdlib -nostartfiles)
-  target_link_options(sentence_gemmini_baremetal PRIVATE
+  target_link_options(${NN_GEMMINI_TARGET} PRIVATE
     -march=rv64gc -mabi=lp64d -mcmodel=medany -nostdlib -nostartfiles -static
     -T "${CMAKE_CURRENT_SOURCE_DIR}/baremetal/linker.ld"
     -Wl,--gc-sections "-Wl,-Map,${NN_GEMMINI_MAP}")
-  target_link_libraries(sentence_gemmini_baremetal PRIVATE
+  target_link_libraries(${NN_GEMMINI_TARGET} PRIVATE
     -Wl,--start-group c m gcc -Wl,--end-group)
-  set_target_properties(sentence_gemmini_baremetal PROPERTIES
+  set_target_properties(${NN_GEMMINI_TARGET} PROPERTIES
     C_STANDARD 99 C_EXTENSIONS ON
     OUTPUT_NAME "${NN_GEMMINI_BASENAME}" SUFFIX ".elf"
     RUNTIME_OUTPUT_DIRECTORY "${NN_GEMMINI_OUTPUT_DIR}")
 
   add_custom_command(OUTPUT "${NN_GEMMINI_BIN}"
     COMMAND "${CMAKE_OBJCOPY}" -O binary "${NN_GEMMINI_ELF}" "${NN_GEMMINI_BIN}"
-    DEPENDS sentence_gemmini_baremetal VERBATIM)
+    DEPENDS ${NN_GEMMINI_TARGET} VERBATIM)
   add_custom_target(baremetal-bin ALL DEPENDS "${NN_GEMMINI_BIN}")
   add_custom_command(OUTPUT "${NN_GEMMINI_DUMP}"
     COMMAND "${CMAKE_COMMAND}"
       "-DOBJDUMP=${CMAKE_OBJDUMP}" "-DELF=${NN_GEMMINI_ELF}"
       "-DOUTPUT=${NN_GEMMINI_DUMP}"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/WriteObjdump.cmake"
-    DEPENDS sentence_gemmini_baremetal VERBATIM)
+    DEPENDS ${NN_GEMMINI_TARGET} VERBATIM)
   add_custom_target(baremetal-dump DEPENDS "${NN_GEMMINI_DUMP}")
   add_custom_target(baremetal-flash
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/flash_baremetal.sh"

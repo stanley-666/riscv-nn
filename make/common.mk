@@ -14,9 +14,11 @@ NN_RISCV_CPU_SRCS := $(sort \
 NN_RISCV_VECTOR_SRCS := $(sort \
     $(wildcard $(NN_COMMON_SRC_DIR)/backends/riscv/vector/ops/*.c) \
     $(wildcard $(NN_COMMON_SRC_DIR)/backends/riscv/vector/ops/*/*.c))
+NN_RISCV_GEMMINI_SRCS := $(sort \
+    $(wildcard $(NN_COMMON_SRC_DIR)/backends/riscv/gemmini/ops/*.c))
 
 BACKEND ?= all
-VALID_BACKENDS := cpu vector all
+VALID_BACKENDS := cpu vector gemmini all
 ifeq ($(filter $(BACKEND),$(VALID_BACKENDS)),)
   $(error Unsupported BACKEND='$(BACKEND)'. Supported: $(VALID_BACKENDS))
 endif
@@ -29,6 +31,13 @@ else ifeq ($(BACKEND),vector)
   NN_CORE_SRCS := $(filter-out $(NN_COMMON_SRC_DIR)/nn_infer_cpu.c,$(NN_CORE_SRCS))
   NN_BACKEND_SRCS := $(NN_RISCV_VECTOR_SRCS)
   NN_BACKEND_CPPFLAGS := -DNN_BACKEND_CPU=0 -DNN_BACKEND_VECTOR=1
+else ifeq ($(BACKEND),gemmini)
+  NN_CORE_SRCS := $(filter-out \
+      $(NN_COMMON_SRC_DIR)/nn_infer_cpu.c \
+      $(NN_COMMON_SRC_DIR)/nn_infer_vpu.c,$(NN_CORE_SRCS))
+  NN_BACKEND_SRCS := $(NN_RISCV_GEMMINI_SRCS)
+  NN_BACKEND_CPPFLAGS := \
+      -DNN_BACKEND_CPU=0 -DNN_BACKEND_VECTOR=0 -DNN_BACKEND_GEMMINI=1
 else
   NN_BACKEND_SRCS := $(NN_RISCV_CPU_SRCS) $(NN_RISCV_VECTOR_SRCS)
   NN_BACKEND_CPPFLAGS := -DNN_BACKEND_CPU=1 -DNN_BACKEND_VECTOR=1

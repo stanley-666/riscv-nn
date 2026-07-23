@@ -79,20 +79,15 @@ source ~/chipyard_1.13.0/chipyard/env.sh
 ```
 
 If Chipyard is installed elsewhere, replace the path above with that
-installation's `env.sh`. This environment provides Spike, `pk`, and the
-Chipyard tool paths used by the commands below. Confirm them before building:
+installation's `env.sh`. For the Gemmini `default` profile this environment
+selects the RV64GC Linux compiler, Spike, `pk`, and Gemmini extension used by
+the commands below. Confirm them before building:
 
 ```sh
 command -v spike
+command -v riscv64-unknown-linux-gnu-gcc
 test -x "$RISCV/riscv64-unknown-elf/bin/pk"
 ```
-
-For a strict scalar `rv64gc_zicntr_zihpm` baseline, the Linux compiler and its
-static libc/sysroot must also be built for scalar RV64GC. An RVV-enabled Linux
-sysroot can insert vector instructions through libc even though this
-repository disables compiler auto-vectorization. Loading `env.sh` provides the
-simulator environment; it does not by itself prove that the selected Linux
-sysroot is scalar.
 
 ### RVV builds use the system compiler
 
@@ -356,19 +351,39 @@ spike --isa=rv64gc_zicntr_zihpm --extension=gemmini \
     build/linux-pk/sentence_gemmini/default/gemmini/static/sentence_gemmini
 ```
 
+Build and simulate the bit-exact scaled INT8 FFT with the same environment:
+
+```sh
+source ~/chipyard_1.13.0/chipyard/env.sh
+
+./scripts/configure_build.sh \
+    linux-pk gemmini fft_batched_int8_gemmini default
+
+spike --isa=rv64gc_zicntr_zihpm --extension=gemmini \
+    "$RISCV/riscv64-unknown-elf/bin/pk" \
+    build/linux-pk/fft_batched_int8_gemmini/default/gemmini/static/fft_batched_int8_gemmini
+```
+
+The FFT target combines eight complex twiddle rotations in each 16x16 Gemmini
+tile, processes 64 batches per matrix multiplication, runs 10 iterations, and
+validates all 65,536 complex points against the shared Q7 ground truth. The
+current RV64GC Gemmini Spike reference passes bit-exact validation with zero
+mismatches and averages 15,489,596 cycles for the complete FFT region. This
+includes bit reversal, matrix packing, Gemmini execution/readback, and scalar
+Q7 post-processing, but excludes input reload and one-time construction of the
+513 prepacked Gemmini twiddle tiles.
+The block-diagonal butterfly mapping, Q7 correction, and host/accelerator split
+are documented in
+[`testbench/fft_batched_int8_gemmini/README.md`](testbench/fft_batched_int8_gemmini/README.md).
+
 The current native/per-tensor reference produces INT8 logit `23` and a correct
 classification on both Spike/pk and Gemmini hardware. The recorded hardware
 run takes `1,682,812` cycles at 50 MHz.
 
-Use the Chipyard Linux cross compiler for this configuration. A GCV-specific
-sysroot may contain vectorized libc routines even when application sources are
-compiled with `-march=rv64gc`; such an ELF traps on a non-vector Gemmini Spike
-configuration before reaching the accelerator.
-
 Bare-metal adapters are `sentence_inference_fp32`, `sentence_inference_int8`,
-`gesture_model`, and `kyber`. Their hardware profiles are `V128D128B`,
-`V256D128B`, and `V512D128B`. Bare-metal adapters currently select the vector
-backend.
+`gesture_model`, `kyber`, `sentence_gemmini`, and
+`fft_batched_int8_gemmini`. Vector targets use their VLEN/datapath profile;
+Gemmini targets use the `GEMMINI` RV64GC profile.
 
 Build the Gemmini bare-metal image with the main repository runtime:
 
@@ -397,6 +412,20 @@ Generate the disassembly with:
     build/cmake/baremetal-sentence_gemmini-gemmini-GEMMINI \
     --target baremetal-dump
 ```
+
+The FFT Gemmini bare-metal equivalent is:
+
+```sh
+./scripts/configure_build.sh \
+    baremetal gemmini fft_batched_int8_gemmini GEMMINI
+
+/usr/bin/cmake --build \
+    build/cmake/baremetal-fft_batched_int8_gemmini-gemmini-GEMMINI \
+    --target baremetal-dump
+```
+
+Its ELF, BIN, dump, and map are under
+`build/baremetal/fft_batched_int8_gemmini/`.
 
 The bare-metal ELF uses the board UART MMIO console and hardware boot ABI. It
 can be loaded by Spike for instruction-level debugging, but standard Spike
@@ -949,9 +978,13 @@ running the repository target:
 
 ```sh
 source ~/chipyard_1.13.0/chipyard/env.sh
-./scripts/configure_build.sh linux-pk gemmini sentence_gemmini default
+
+# Select sentence_gemmini or fft_batched_int8_gemmini.
+GEMMINI_TESTBENCH=fft_batched_int8_gemmini
+./scripts/configure_build.sh \
+    linux-pk gemmini "$GEMMINI_TESTBENCH" default
 /usr/bin/cmake --build \
-    build/cmake/linux-pk-sentence_gemmini-gemmini-default \
+    "build/cmake/linux-pk-${GEMMINI_TESTBENCH}-gemmini-default" \
     --target run-spike-gemmini
 ```
 

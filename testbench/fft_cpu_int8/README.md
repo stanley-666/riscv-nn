@@ -18,11 +18,20 @@ python3 py/fft/fft_int8_groundtruth.py --size 1024 \
 ```sh
 ./scripts/configure_build.sh linux-pk cpu fft_cpu_int8 default
 
-spike --isa=rv64gc_zicntr_zihpm pk \
+spike --isa=rv64gcv_zicntr_zihpm_zvbb_zvl128b_zve64d pk \
     build/linux-pk/fft_cpu_int8/default/cpu/static/fft_cpu_int8
 ```
 
-Compiler auto-vectorization is disabled, so this remains a scalar baseline.
+Compiler auto-vectorization is disabled, and disassembly of
+`fft_cpu_int8.c.o` contains no vector instructions, so the measured FFT
+kernels remain scalar. The current statically linked runtime/libc contains RVV
+instructions and therefore requires V in Spike's ISA string even though the
+testbench object and measured scalar kernels do not use RVV.
+The same binary runs both the original stage-by-stage scalar kernel and a
+two-stage-fused scalar kernel. Both share one twiddle plan and run 10 times.
+The fused kernel preserves the first stage's RNU scaling, saturation, and Q7
+quantization in scalar temporaries before evaluating the second stage, so
+fusion removes only the intermediate memory store/reload.
 
 ## Bare-metal build
 
@@ -53,14 +62,51 @@ make baremetal-flash \
 Replace `/dev/sdX` with the whole, unmounted SD-card device. Flashing
 overwrites data on the selected device.
 
-The testbench reports plan, input layout, FFT, reused-plan total, and first-run
-total cycles using the same boundaries as the RVV testbench. Validation checks
-all 65,536 complex points for exact equality and prints the first 64 mismatches.
+For both `baseline` and `stage-fused`, the testbench reports 10-run average
+input-layout, bit-reversal, butterfly, FFT, and reused-plan cycles, plus
+first-run-equivalent cycles. Validation checks all 65,536 complex points for
+exact equality and prints the first 64 mismatches.
 
 ## Performance results
 
-The following rows are single cold-start runs of the current pure CPU
+### Current baseline and stage-fused Spike result
+
+Both variants passed bit-exact validation with `0 / 65,536` mismatches.
+Twiddle-plan creation took 115,984 cycles.
+
+| Variant | Input layout | Bit reversal | Butterfly | FFT | Butterfly cycles/FFT | FFT cycles/FFT |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline | 661,411 | 3,105,992 | 14,176,852 | 17,282,844 | 221,513 | 270,044 |
+| stage-fused | 590,278 | 3,105,991 | 12,892,427 | 15,998,418 | 201,444 | 249,975 |
+
+Scalar stage fusion improves the butterfly region by `1.10x`. For a fair RVV
+comparison, baseline CPU should be compared with baseline RVV, and fused CPU
+with fused RVV.
+
+### Current 50 MHz Genesys2 pure-CPU result
+
+This cold-cache bare-metal result uses the same 10-run averaging and bit-exact
+validation policy. Both variants passed with `0 / 65,536` mismatches.
+
+| Variant | Input layout | Bit reversal | Butterfly | FFT | Reused plan | First-run equivalent | Butterfly cycles/FFT | FFT cycles/FFT |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline | 616,591 | 2,340,831 | **11,461,004** | **13,801,835** | **14,418,426** | **14,605,811** | **179,078** | **215,653** |
+| stage-fused | 541,599 | 2,302,478 | 11,638,084 | 13,940,562 | 14,482,161 | 14,669,546 | 181,845 | 217,821 |
+
+Twiddle-plan creation took 187,385 cycles. Unlike Spike, scalar stage fusion
+is `1.02x` slower in the butterfly region on this hardware. Its lower input
+layout and bit-reversal averages reduce the overall penalty, but the
+reused-plan path is still about 0.44% slower than baseline. The pure-CPU
+hardware reference should therefore use the baseline result.
+
+### Archived pre-fusion results
+
+The following rows are single cold-start runs of the earlier pure CPU
 implementation rather than multi-run averages:
+
+> These rows predate the hot-loop branch hoist and separate bit-reversal /
+> butterfly counters. Re-run the current binary before using them as the final
+> scalar baseline.
 
 | Environment | FFT size | Batches | Scale | Twiddle plan cycles | Input layout cycles | FFT cycles | Reused-plan total cycles | First-run total cycles | FFT cycles/FFT | Reused-plan cycles/FFT | First-run cycles/FFT | Mismatches | Result |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |

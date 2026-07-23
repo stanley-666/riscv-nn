@@ -13,6 +13,7 @@
 #include "nn_runtime.h"
 
 #define FFT_CPU_INT8_BATCH_COUNT 64
+#define FFT_CPU_INT8_BENCHMARK_RUNS 10u
 #define FFT_CPU_INT8_MAX_MISMATCH_REPORTS 64
 
 typedef struct {
@@ -118,9 +119,9 @@ static void fft_cpu_plan_load_input_q7(const fft_cpu_plan_q7_t *plan)
     }
 }
 
-static void fft_cpu_q7(int8_t *real,
-                       int8_t *imag,
-                       const fft_cpu_plan_q7_t *plan)
+static void fft_cpu_bit_reverse_q7(int8_t *real,
+                                   int8_t *imag,
+                                   const fft_cpu_plan_q7_t *plan)
 {
     for (size_t index = 0; index < plan->size; ++index) {
         size_t reversed = reverse_bits((unsigned)index, plan->stage_count);
@@ -133,26 +134,36 @@ static void fft_cpu_q7(int8_t *real,
             imag[reversed] = temporary;
         }
     }
+}
 
+static void fft_cpu_butterflies_q7(int8_t *real,
+                                   int8_t *imag,
+                                   const fft_cpu_plan_q7_t *plan)
+{
     for (size_t block_size = 2; block_size <= plan->size; block_size <<= 1) {
         size_t half = block_size >> 1;
         size_t stage_base = half - 1;
+
         for (size_t block = 0; block < plan->size; block += block_size) {
-            for (size_t offset = 0; offset < half; ++offset) {
+            size_t odd = block + half;
+            int32_t er = real[block], ei = imag[block];
+            int32_t or_ = real[odd], oi = imag[odd];
+            real[block] = (int8_t)rnu_shift(er + or_, 1);
+            imag[block] = (int8_t)rnu_shift(ei + oi, 1);
+            real[odd] = (int8_t)rnu_shift(er - or_, 1);
+            imag[odd] = (int8_t)rnu_shift(ei - oi, 1);
+        }
+
+        for (size_t block = 0; block < plan->size; block += block_size) {
+            for (size_t offset = 1; offset < half; ++offset) {
                 size_t even = block + offset;
                 size_t odd = even + half;
                 int32_t er = real[even], ei = imag[even];
                 int32_t or_ = real[odd], oi = imag[odd];
-                int32_t tr, ti;
-                if (offset == 0) {
-                    tr = or_;
-                    ti = oi;
-                } else {
-                    int32_t wr = plan->twiddle_real[stage_base + offset];
-                    int32_t wi = plan->twiddle_imag[stage_base + offset];
-                    tr = saturate_i8(rnu_shift(or_ * wr - oi * wi, 7));
-                    ti = saturate_i8(rnu_shift(oi * wr + or_ * wi, 7));
-                }
+                int32_t wr = plan->twiddle_real[stage_base + offset];
+                int32_t wi = plan->twiddle_imag[stage_base + offset];
+                int32_t tr = saturate_i8(rnu_shift(or_ * wr - oi * wi, 7));
+                int32_t ti = saturate_i8(rnu_shift(oi * wr + or_ * wi, 7));
                 real[even] = (int8_t)rnu_shift(er + tr, 1);
                 imag[even] = (int8_t)rnu_shift(ei + ti, 1);
                 real[odd] = (int8_t)rnu_shift(er - tr, 1);
@@ -160,6 +171,145 @@ static void fft_cpu_q7(int8_t *real,
             }
         }
     }
+}
+
+static void scalar_butterfly_q7(int8_t er, int8_t ei,
+                                int8_t or_, int8_t oi,
+                                int8_t wr, int8_t wi, int unity,
+                                int8_t *upper_r, int8_t *upper_i,
+                                int8_t *lower_r, int8_t *lower_i)
+{
+    int32_t tr = or_;
+    int32_t ti = oi;
+    if (!unity) {
+        tr = saturate_i8(rnu_shift(
+            (int32_t)or_ * wr - (int32_t)oi * wi, 7));
+        ti = saturate_i8(rnu_shift(
+            (int32_t)oi * wr + (int32_t)or_ * wi, 7));
+    }
+    *upper_r = (int8_t)rnu_shift((int32_t)er + tr, 1);
+    *upper_i = (int8_t)rnu_shift((int32_t)ei + ti, 1);
+    *lower_r = (int8_t)rnu_shift((int32_t)er - tr, 1);
+    *lower_i = (int8_t)rnu_shift((int32_t)ei - ti, 1);
+}
+
+static void fft_cpu_butterflies_stage_fused_q7(
+    int8_t *real, int8_t *imag, const fft_cpu_plan_q7_t *plan)
+{
+    for (size_t block_size = 2; block_size <= plan->size;
+         block_size <<= 2) {
+        size_t half = block_size >> 1;
+        size_t next_block_size = block_size << 1;
+        size_t stage_a_base = half - 1;
+        size_t stage_b_base = block_size - 1;
+        for (size_t block = 0; block < plan->size;
+             block += next_block_size) {
+            for (size_t offset = 0; offset < half; ++offset) {
+                size_t p0 = block + offset;
+                size_t p1 = p0 + half;
+                size_t p2 = p0 + block_size;
+                size_t p3 = p1 + block_size;
+                int8_t y0r, y0i, y1r, y1i;
+                int8_t y2r, y2i, y3r, y3i;
+                int8_t z0r, z0i, z2r, z2i;
+                int8_t z1r, z1i, z3r, z3i;
+                int8_t ar = plan->twiddle_real[stage_a_base + offset];
+                int8_t ai = plan->twiddle_imag[stage_a_base + offset];
+                int8_t b0r = plan->twiddle_real[stage_b_base + offset];
+                int8_t b0i = plan->twiddle_imag[stage_b_base + offset];
+                int8_t b1r =
+                    plan->twiddle_real[stage_b_base + half + offset];
+                int8_t b1i =
+                    plan->twiddle_imag[stage_b_base + half + offset];
+
+                scalar_butterfly_q7(
+                    real[p0], imag[p0], real[p1], imag[p1], ar, ai,
+                    offset == 0, &y0r, &y0i, &y1r, &y1i);
+                scalar_butterfly_q7(
+                    real[p2], imag[p2], real[p3], imag[p3], ar, ai,
+                    offset == 0, &y2r, &y2i, &y3r, &y3i);
+                scalar_butterfly_q7(
+                    y0r, y0i, y2r, y2i, b0r, b0i, offset == 0,
+                    &z0r, &z0i, &z2r, &z2i);
+                scalar_butterfly_q7(
+                    y1r, y1i, y3r, y3i, b1r, b1i, 0,
+                    &z1r, &z1i, &z3r, &z3i);
+                real[p0] = z0r; imag[p0] = z0i;
+                real[p1] = z1r; imag[p1] = z1i;
+                real[p2] = z2r; imag[p2] = z2i;
+                real[p3] = z3r; imag[p3] = z3i;
+            }
+        }
+    }
+}
+
+typedef void (*fft_cpu_q7_function_t)(
+    int8_t *, int8_t *, const fft_cpu_plan_q7_t *);
+
+static size_t count_mismatches_q7(const fft_cpu_plan_q7_t *plan)
+{
+    size_t mismatches = 0;
+    for (size_t batch = 0; batch < plan->batch_count; ++batch) {
+        size_t base = batch * plan->size;
+        for (size_t bin = 0; bin < plan->size; ++bin)
+            if (plan->data_real[base + bin] !=
+                    fft_int8_groundtruth_real[bin] ||
+                plan->data_imag[base + bin] !=
+                    fft_int8_groundtruth_imag[bin])
+                ++mismatches;
+    }
+    return mismatches;
+}
+
+static int run_cpu_q7_variant(fft_cpu_plan_q7_t *plan, const char *name,
+                              uint64_t plan_cycles,
+                              fft_cpu_q7_function_t function)
+{
+    uint64_t layout = 0, reverse = 0, butterfly = 0;
+    for (unsigned run = 0; run < FFT_CPU_INT8_BENCHMARK_RUNS; ++run) {
+        uint64_t begin = nn_runtime_read_cycles();
+        fft_cpu_plan_load_input_q7(plan);
+        uint64_t layout_end = nn_runtime_read_cycles();
+        for (size_t batch = 0; batch < plan->batch_count; ++batch) {
+            size_t base = batch * plan->size;
+            fft_cpu_bit_reverse_q7(
+                &plan->data_real[base], &plan->data_imag[base], plan);
+        }
+        uint64_t reverse_end = nn_runtime_read_cycles();
+        for (size_t batch = 0; batch < plan->batch_count; ++batch) {
+            size_t base = batch * plan->size;
+            function(&plan->data_real[base], &plan->data_imag[base], plan);
+        }
+        uint64_t end = nn_runtime_read_cycles();
+        layout += layout_end - begin;
+        reverse += reverse_end - layout_end;
+        butterfly += end - reverse_end;
+    }
+    layout /= FFT_CPU_INT8_BENCHMARK_RUNS;
+    reverse /= FFT_CPU_INT8_BENCHMARK_RUNS;
+    butterfly /= FFT_CPU_INT8_BENCHMARK_RUNS;
+    uint64_t fft = reverse + butterfly;
+    uint64_t reused = layout + fft;
+    size_t mismatches = count_mismatches_q7(plan);
+    printf("\nCPU int8 variant: %s\nbenchmark runs: %u\n", name,
+        FFT_CPU_INT8_BENCHMARK_RUNS);
+    printf("average input layout cycles: "); print_u64_decimal(layout);
+    printf("\naverage bit reversal cycles: "); print_u64_decimal(reverse);
+    printf("\naverage butterfly cycles: "); print_u64_decimal(butterfly);
+    printf("\naverage FFT cycles: "); print_u64_decimal(fft);
+    printf("\naverage reused-plan total cycles: "); print_u64_decimal(reused);
+    printf("\nfirst-run equivalent cycles: ");
+    print_u64_decimal(plan_cycles + reused);
+    printf("\naverage butterfly cycles per FFT: ");
+    print_u64_decimal(butterfly / plan->batch_count);
+    printf("\naverage FFT cycles per FFT: ");
+    print_u64_decimal(fft / plan->batch_count);
+    printf("\nmismatched complex points: %u / %u\n",
+        (unsigned)mismatches,
+        (unsigned)(plan->size * plan->batch_count));
+    printf("FFT CPU int8 %s: %s\n", name,
+        mismatches == 0 ? "PASS" : "FAIL");
+    return mismatches == 0;
 }
 
 int fft_cpu_int8_testbench_run(void)
@@ -174,15 +324,21 @@ int fft_cpu_int8_testbench_run(void)
         return 1;
     }
 
-    uint64_t layout_start = nn_runtime_read_cycles();
-    fft_cpu_plan_load_input_q7(&plan);
-    uint64_t layout_end = nn_runtime_read_cycles();
-    uint64_t fft_start = nn_runtime_read_cycles();
-    for (size_t batch = 0; batch < plan.batch_count; ++batch) {
-        size_t base = batch * plan.size;
-        fft_cpu_q7(&plan.data_real[base], &plan.data_imag[base], &plan);
-    }
-    uint64_t fft_end = nn_runtime_read_cycles();
+    uint64_t plan_cycles = plan_end - plan_start;
+    printf("FFT size: %u\nstages: %u\nbatches: %u\nscale: 1/%u\n",
+        (unsigned)plan.size, plan.stage_count, (unsigned)plan.batch_count,
+        (unsigned)plan.size);
+    printf("twiddle plan cycles: "); print_u64_decimal(plan_cycles);
+    printf("\n");
+    int baseline_ok = run_cpu_q7_variant(
+        &plan, "baseline", plan_cycles, fft_cpu_butterflies_q7);
+    int fused_ok = 0;
+    if ((plan.stage_count & 1u) == 0u)
+        fused_ok = run_cpu_q7_variant(
+            &plan, "stage-fused", plan_cycles,
+            fft_cpu_butterflies_stage_fused_q7);
+    else
+        printf("FFT CPU int8 stage-fused: FAIL (requires even stages)\n");
 
     size_t mismatches = 0, reported = 0;
     int max_error = 0;
@@ -213,22 +369,6 @@ int fft_cpu_int8_testbench_run(void)
         }
     }
 
-    uint64_t plan_cycles = plan_end - plan_start;
-    uint64_t layout_cycles = layout_end - layout_start;
-    uint64_t fft_cycles = fft_end - fft_start;
-    uint64_t reused_cycles = layout_cycles + fft_cycles;
-    uint64_t first_cycles = plan_cycles + reused_cycles;
-    printf("FFT size: %u\nstages: %u\nbatches: %u\nscale: 1/%u\n",
-        (unsigned)plan.size, plan.stage_count, (unsigned)plan.batch_count,
-        (unsigned)plan.size);
-    printf("twiddle plan cycles: "); print_u64_decimal(plan_cycles);
-    printf("\ninput layout cycles: "); print_u64_decimal(layout_cycles);
-    printf("\nFFT cycles: "); print_u64_decimal(fft_cycles);
-    printf("\nreused-plan total cycles: "); print_u64_decimal(reused_cycles);
-    printf("\nfirst-run total cycles: "); print_u64_decimal(first_cycles);
-    printf("\nFFT cycles per FFT: "); print_u64_decimal(fft_cycles / plan.batch_count);
-    printf("\nreused-plan cycles per FFT: "); print_u64_decimal(reused_cycles / plan.batch_count);
-    printf("\nfirst-run cycles per FFT: "); print_u64_decimal(first_cycles / plan.batch_count);
     printf("\nmax component error: %d at batch %u bin %u\n", max_error,
         (unsigned)max_batch, (unsigned)max_bin);
     printf("mismatched complex points: %u / %u\n", (unsigned)mismatches,
@@ -236,7 +376,7 @@ int fft_cpu_int8_testbench_run(void)
     if (mismatches > reported) printf("mismatch report truncated: showed first %u of %u points\n",
         (unsigned)reported, (unsigned)mismatches);
 
-    if (mismatches != 0) {
+    if (!baseline_ok || !fused_ok || mismatches != 0) {
         printf("FFT CPU int8: FAIL (bit-exact Q7 validation)\n");
         fft_cpu_plan_destroy_q7(&plan);
         return 1;

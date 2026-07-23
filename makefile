@@ -106,6 +106,7 @@ endif
 all: $(TB_BINS)
 
 TESTBENCH ?= sentence_inference_fp32
+SDCARD_BLOCK ?= 34
 LINUX_TESTBENCHES := gesture_recognition_fp32 kyber_nouv_rvv resnet50 \
                     sentence_inference_fp32 sentence_inference_fp32_time \
                     sentence_inference_int8
@@ -127,8 +128,21 @@ baremetal-elf:
 baremetal-dump:
 	$(MAKE) -C baremetal dump
 
+ifeq ($(BACKEND),gemmini)
+baremetal-flash:
+	./scripts/configure_build.sh baremetal gemmini $(TESTBENCH) $(HARDWARE_CONFIG)
+	/usr/bin/cmake -S . \
+		-B build/cmake/baremetal-$(TESTBENCH)-gemmini-$(HARDWARE_CONFIG) \
+		-DNN_SDCARD_DEVICE="$(SDCARD_DEVICE)" \
+		-DNN_SDCARD_BLOCK="$(SDCARD_BLOCK)" \
+		-DNN_FLASH_CONFIRM="$(FLASH_CONFIRM)"
+	/usr/bin/cmake --build \
+		build/cmake/baremetal-$(TESTBENCH)-gemmini-$(HARDWARE_CONFIG) \
+		--target baremetal-flash
+else
 baremetal-flash:
 	$(MAKE) -C baremetal flash
+endif
 
 define TB_template
 $(notdir $(1:.c=)): $(LINUX_BUILD_DIR)/$(notdir $(1:.c=))/$(CONFIG)/$(BACKEND)/$(LINK_MODE)/$(notdir $(1:.c=))

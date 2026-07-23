@@ -19,6 +19,17 @@ and calls neither `cosf()` nor `sinf()`. Linux/Spike selects
 `baremetal/nn_runtime_baremetal.c`. Both provide 64-byte-aligned allocation and
 the common `nn_runtime_read_cycles()` interface.
 
+The testbench runs two scalar kernels without changing the input layout:
+
+- `baseline`: completes and stores every radix-2 stage separately;
+- `stage-fused`: evaluates two consecutive stages through scalar temporaries,
+  removing the intermediate store/reload boundary.
+
+Both variants share the same dynamically initialized twiddle plan. Each
+variant reloads the original input, performs the same bit reversal, runs 10
+times, and reports average cycles. This separates scalar stage-fusion gains
+from the gains due to RVV vectorization.
+
 Regenerate the local input and ground truth with:
 
 ```sh
@@ -74,18 +85,28 @@ make baremetal-flash \
 Replace `/dev/sdX` with the whole SD-card device, not a partition. Flashing
 overwrites data on the selected device.
 
-The testbench reports the following regions separately:
+For each scalar variant, the testbench reports the following regions
+separately:
 
 - `twiddle plan cycles`: four runtime allocations and twiddle initialization;
-- `input layout cycles`: copying 64 inputs into contiguous batch-major data;
-- `FFT cycles`: 64 scalar FFT calls, including one bit reversal per input;
-- `reused-plan total cycles`: input layout plus FFT;
-- `first-run total cycles`: plan initialization, input layout, and FFT.
+- `average input layout cycles`: copying 64 inputs into batch-major data;
+- `average bit reversal cycles`: bit reversal for all 64 inputs;
+- `average butterfly cycles`: twiddle lookup and all butterfly stages;
+- `average FFT cycles`: bit reversal plus butterfly cycles;
+- `average reused-plan total cycles`: input layout plus FFT;
+- `first-run equivalent cycles`: plan initialization plus an average run.
 
 Result validation and printing are outside these measured regions. Validation
 checks all 65,536 complex outputs and reports the batch and bin of mismatches.
+The 1,024-point configuration has 10 stages, so the fused kernel processes five
+pairs of stages. An odd stage count is rejected by the fused benchmark rather
+than silently falling back to a different schedule.
 
 ## Performance results
+
+> The recorded rows below predate the hot-loop branch hoist and separate
+> bit-reversal / butterfly counters. Re-run the current binary before using it
+> as the final scalar baseline.
 
 ### Current four-buffer runtime-plan implementation
 

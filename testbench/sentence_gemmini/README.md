@@ -26,18 +26,37 @@ The default configuration uses:
 Build and execute the Linux/Spike target:
 
 ```sh
-source /home/mc2/chipyard_1.13.0/chipyard/env.sh
+source ~/chipyard_1.13.0/chipyard/env.sh
 ./scripts/configure_build.sh linux-pk gemmini sentence_gemmini default
 /usr/bin/cmake --build \
     build/cmake/linux-pk-sentence_gemmini-gemmini-default \
     --target run-spike-gemmini
 ```
 
+Equivalent direct execution:
+
+```sh
+spike --isa=rv64gc_zicntr_zihpm --extension=gemmini \
+    "$RISCV/riscv64-unknown-elf/bin/pk" \
+    build/linux-pk/sentence_gemmini/default/gemmini/static/sentence_gemmini
+```
+
 Build the flashable bare-metal image:
 
 ```sh
+source ~/chipyard_1.13.0/chipyard/env.sh
 ./scripts/configure_build.sh baremetal gemmini sentence_gemmini GEMMINI
+
+/usr/bin/cmake --build \
+    build/cmake/baremetal-sentence_gemmini-gemmini-GEMMINI \
+    --target baremetal-dump
 ```
+
+Bare-metal artifacts are written to
+`build/baremetal/sentence_gemmini/` as
+`GEMMINI_nn_gemmini_baremetal.{elf,bin,dump,map}`. The board runtime uses UART
+MMIO and does not provide Spike `tohost/fromhost`; use the Linux/pk executable
+above for functional Spike simulation.
 
 The native/per-tensor path is verified on both Spike/pk and Gemmini hardware
 with final INT8 logit `23` and a correct classification. The recorded
