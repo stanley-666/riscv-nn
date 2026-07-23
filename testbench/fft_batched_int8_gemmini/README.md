@@ -5,10 +5,11 @@ used by `fft_cpu_int8` and `fft_batched_int8`.
 
 Each Gemmini operation combines eight non-unity butterflies. Their complex
 twiddle rotations are packed into a 16x16 block-diagonal matrix and multiplied
-by a 16x64 lower-input matrix. Gemmini returns int32 accumulators. The host then
-applies the same RNU Q14-to-Q7 conversion, saturation, upper/lower add-subtract,
-and stage division by two as the CPU and RVV implementations. Unity butterflies
-remain on the host because Q7 `127` is not an exact representation of 1.0.
+by a 16x64 lower-input matrix using Gemmini's weight-stationary dataflow.
+Gemmini returns int32 accumulators. The host then applies the same RNU
+Q14-to-Q7 conversion, saturation, upper/lower add-subtract, and stage division
+by two as the CPU and RVV implementations. Unity butterflies remain on the
+host because Q7 `127` is not an exact representation of 1.0.
 
 The `wi=-128` case would require an unrepresentable `+128` matrix coefficient.
 The testbench uses `+127` and adds the missing odd-imaginary term to the int32
@@ -79,18 +80,19 @@ b_{7,i}^{(0)}&\cdots&b_{7,i}^{(63)}
 \end{bmatrix}.
 $$
 
-One `tiled_matmul_auto()` call computes
+One weight-stationary `tiled_matmul_auto()` call computes
 
 $$
-Y_{tile}^{int32}=W_{tile}^{Q7}X_{tile}^{Q7},
+Y_{tile}^{int32}=W_{tile}^{Q7}X_{tile}^{Q7}.
 $$
 
-so one Gemmini operation performs the complex twiddle rotations for eight
-butterflies across all 64 batches. A partial final tile is zero padded. The
-matrix is intentionally sparse: it contains 32 nonzero coefficients out of
-256 entries. This preserves $O(N\log N)$ FFT scheduling, but the unused
-systolic-array products are an important reason Gemmini is not automatically
-efficient for this workload.
+The Gemmini WS wrapper keeps a reusable operand in scratchpad when it fits and
+uses internal double buffering. Thus one Gemmini operation performs the
+complex twiddle rotations for eight butterflies across all 64 batches. A
+partial final tile is zero padded. The matrix is intentionally sparse: it
+contains 32 nonzero coefficients out of 256 entries. This preserves
+$O(N\log N)$ FFT scheduling, but the unused systolic-array products are an
+important reason Gemmini is not automatically efficient for this workload.
 
 Gemmini returns full int32 accumulators. For every complex result the host then
 uses the same two-step Q7 arithmetic as the CPU and RVV implementations:
@@ -111,6 +113,14 @@ complete butterfly into a single Gemmini matrix followed by one shift would
 change the numerical definition. Unity-twiddle butterflies ($w=1+j0$) are also
 executed by the host because Q7 stores unity as 127 rather than exact 128.
 
+The binary also validates Gemmini-native output scaling independently of the
+timed FFT regions. A WS matmul with output scale $1/128$ and a WS butterfly
+matrix with output scale $1/2$ are checked against the software model of
+Gemmini's round-to-nearest-even scaling and saturating INT8 store. Boundary,
+negative, and halfway cases are included. The native hardware/model results
+must match exactly; the test separately reports how often they differ from
+the FFT's current RNU definition.
+
 For `wi=-128`, the coefficient `-wi=+128` cannot be represented by Gemmini's
 signed INT8 `elem_t`. The packed matrix uses +127, then the host adds one copy
 of $b_i$ to the corresponding int32 real accumulator before RNU. This exactly
@@ -128,7 +138,7 @@ enumerate non-unity butterflies in groups of 8
 load prepacked 16x16 twiddle matrix; pack dynamic 16x64 lower-input matrix
         |
         v
-Gemmini tiled_matmul_auto -> 16x64 int32 accumulators
+Gemmini WS tiled_matmul_auto -> 16x64 int32 accumulators
         |
         v
 host Q7 RNU/saturation and upper/lower add-subtract
@@ -248,7 +258,7 @@ A valid run must finish with:
 
 ```text
 mismatched complex points: 0 / 65536
-FFT batched int8 Gemmini: PASS (bit-exact Q7 validation)
+FFT batched int8 Gemmini: PASS (Q7 and native-scaling validation)
 ```
 
 The measured FFT region includes bit reversal, matrix packing, Gemmini matrix
@@ -282,7 +292,7 @@ average FFT cycles: 17602856
 mismatched complex points: 0 / 65536
 FFT int8 Gemmini stage-fused: PASS
 
-FFT batched int8 Gemmini: PASS (bit-exact Q7 validation)
+FFT batched int8 Gemmini: PASS (Q7 and native-scaling validation)
 ```
 
 Both values are complete timed FFT regions: bit reversal, matrix packing,
@@ -295,22 +305,57 @@ more Gemmini/host handoffs. Those costs exceed the saved store/reload traffic.
 Compare these values with equivalently scoped CPU/RVV FFT regions, not with a
 butterfly-only counter.
 
+### Full Gemmini-native scaling validation
+
+The same binary runs a third complete FFT variant using Gemmini-native
+round-to-nearest-even and saturating INT8 output scaling. Twiddle matmul writes
+Q7 INT8 directly with output scale $1/128$. A second WS matmul applies the
+butterfly matrix
+
+$$
+\begin{bmatrix}1&1\\1&-1\end{bmatrix}
+$$
+
+with output scale $1/2$, so Gemmini performs the upper/lower add-subtract,
+rounding, saturation, and stage scaling. Unity butterflies use the same
+Gemmini butterfly matrix. The unrepresentable `wi=-128` coefficient remains a
+host-specialized correction.
+
+A scalar reference independently implements the same Gemmini-native RNE and
+saturation semantics for all 10 stages. The verified Spike result is:
+
+| Variant | Average FFT cycles | Reference mismatches | Result |
+| --- | ---: | ---: | --- |
+| native scaling | 20,090,711 | 0 / 65,536 | PASS |
+
+This is a complete 1,024-point, 64-batch FFT comparison, not only a primitive
+test. It is `1.31x` slower than the matching 15,295,181-cycle host-Q7 baseline
+in this build. Moving Q7 post-processing into Gemmini is therefore
+functionally valid, but two accelerator matmuls per butterfly group cost more
+than the saved scalar post-processing in the current mapping.
+
 ## Verified 30 MHz Gemmini hardware result
 
-The following measurement was collected on the 30 MHz Gemmini hardware. Both
-variants use 10-run averages and pass bit-exact validation.
+The current baseline measurement was collected on the 30 MHz Gemmini hardware
+with a 10-run average and passed bit-exact validation.
 
 | Variant | Average FFT cycles | Time at 30 MHz | Mismatches | Result |
 | --- | ---: | ---: | ---: | --- |
-| baseline | **19,595,333** | 653.18 ms | 0 / 65,536 | PASS |
-| stage-fused | 26,599,496 | 886.65 ms | 0 / 65,536 | PASS |
+| baseline | **19,073,443** | **635.78 ms** | 0 / 65,536 | PASS |
+| stage-fused | pending | pending | — | pending |
+| native scaling | pending | pending | — | pending |
 
-Twiddle-plan creation took 515,193 cycles, or 17.17 ms at 30 MHz, and is
-excluded from both FFT averages. On hardware, stage fusion is `1.36x` slower
-than baseline. The hardware penalty is larger than Spike's `1.15x` slowdown,
-reinforcing that the additional Gemmini/host handoffs and constrained
-four-group packing cost more than the eliminated global stage-boundary
-store/reload.
+Twiddle-plan creation took 512,544 cycles, or 17.08 ms at 30 MHz, and is
+excluded from the FFT average. The baseline requires about 298,023 cycles, or
+9.93 ms, per FFT.
+
+### Archived earlier 30 MHz result
+
+The preceding hardware binary measured 19,595,333 cycles (653.18 ms) for the
+baseline and 26,599,496 cycles (886.65 ms) for stage fusion. The current
+baseline is 2.66% faster than that earlier baseline. The old stage-fused value
+must not be combined with the current baseline to calculate a current fusion
+speedup; rerun the current stage-fused binary first.
 
 ## Bare-metal RV64GC build
 

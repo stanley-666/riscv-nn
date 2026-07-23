@@ -58,10 +58,26 @@ static elem_t matrix_x[FFT_GEMMINI_TILE_DIM][FFT_GEMMINI_BATCHES]
     __attribute__((aligned(64)));
 static acc_t matrix_y[FFT_GEMMINI_TILE_DIM][FFT_GEMMINI_BATCHES]
     __attribute__((aligned(64)));
+static elem_t native_twiddle_y[FFT_GEMMINI_TILE_DIM][FFT_GEMMINI_BATCHES]
+    __attribute__((aligned(64)));
+static elem_t native_butterfly_x[FFT_GEMMINI_TILE_DIM][FFT_GEMMINI_BATCHES]
+    __attribute__((aligned(64)));
+static elem_t native_butterfly_y[FFT_GEMMINI_TILE_DIM][FFT_GEMMINI_BATCHES]
+    __attribute__((aligned(64)));
+static elem_t native_butterfly_weights
+    [FFT_GEMMINI_TILE_DIM][FFT_GEMMINI_TILE_DIM]
+    __attribute__((aligned(64)));
+static int8_t native_reference_real[FFT_INT8_SIZE];
+static int8_t native_reference_imag[FFT_INT8_SIZE];
 static int8_t fused_real[FFT_GEMMINI_TILE_DIM][FFT_GEMMINI_BATCHES]
     __attribute__((aligned(64)));
 static int8_t fused_imag[FFT_GEMMINI_TILE_DIM][FFT_GEMMINI_BATCHES]
     __attribute__((aligned(64)));
+
+static int8_t gemmini_scaled_reference(int32_t value, acc_scale_t scale)
+{
+    return (int8_t)ACC_SCALE(value, scale);
+}
 
 static int32_t rnu_shift(int32_t value, unsigned shift)
 {
@@ -203,6 +219,61 @@ static void make_twiddle_plan(void)
         }
     }
     fused_tile_count = (uint16_t)fused_next;
+
+    for (size_t group = 0; group < FFT_GEMMINI_FUSED_GROUPS; ++group) {
+        size_t ar = 4 * group, tr = ar + 1;
+        size_t ai = ar + 2, ti = ar + 3;
+        native_butterfly_weights[ar][ar] = 1;
+        native_butterfly_weights[ar][tr] = 1;
+        native_butterfly_weights[tr][ar] = 1;
+        native_butterfly_weights[tr][tr] = -1;
+        native_butterfly_weights[ai][ai] = 1;
+        native_butterfly_weights[ai][ti] = 1;
+        native_butterfly_weights[ti][ai] = 1;
+        native_butterfly_weights[ti][ti] = -1;
+    }
+}
+
+static void make_native_reference(void)
+{
+    for (size_t bin = 0; bin < FFT_INT8_SIZE; ++bin) {
+        size_t reversed = reverse_bits((unsigned)bin, 10);
+        native_reference_real[reversed] = fft_int8_input_real[bin];
+        native_reference_imag[reversed] = fft_int8_input_imag[bin];
+    }
+
+    for (size_t bs = 2; bs <= FFT_INT8_SIZE; bs <<= 1) {
+        size_t half = bs >> 1;
+        size_t stage_base = half - 1;
+        for (size_t block = 0; block < FFT_INT8_SIZE; block += bs)
+            for (size_t off = 0; off < half; ++off) {
+                size_t even = block + off, odd = even + half;
+                int32_t ar = native_reference_real[even];
+                int32_t ai = native_reference_imag[even];
+                int32_t br = native_reference_real[odd];
+                int32_t bi = native_reference_imag[odd];
+                int8_t tr, ti;
+                if (off == 0) {
+                    tr = (int8_t)br;
+                    ti = (int8_t)bi;
+                } else {
+                    int32_t wr = twiddle_real[stage_base + off];
+                    int32_t wi = twiddle_imag[stage_base + off];
+                    tr = gemmini_scaled_reference(
+                        wr * br - wi * bi, 1.0f / 128.0f);
+                    ti = gemmini_scaled_reference(
+                        wi * br + wr * bi, 1.0f / 128.0f);
+                }
+                native_reference_real[even] =
+                    gemmini_scaled_reference(ar + tr, 0.5f);
+                native_reference_imag[even] =
+                    gemmini_scaled_reference(ai + ti, 0.5f);
+                native_reference_real[odd] =
+                    gemmini_scaled_reference(ar - tr, 0.5f);
+                native_reference_imag[odd] =
+                    gemmini_scaled_reference(ai - ti, 0.5f);
+            }
+    }
 }
 
 static void load_input(void)
@@ -302,6 +373,139 @@ static void run_fft(void)
     for (size_t bs = 2; bs <= FFT_INT8_SIZE; bs <<= 1, ++stage) {
         unity_butterflies(bs);
         if (stage_tile_count[stage] != 0) gemmini_stage(stage);
+    }
+}
+
+static void native_butterfly_apply(
+    size_t count, const uint16_t *even_bins, const uint16_t *odd_bins,
+    size_t twiddle_lane, int unity)
+{
+    for (size_t row = 0; row < FFT_GEMMINI_TILE_DIM; ++row)
+        for (size_t batch = 0; batch < FFT_GEMMINI_BATCHES; ++batch)
+            native_butterfly_x[row][batch] = 0;
+
+    for (size_t group = 0; group < count; ++group) {
+        size_t ar = 4 * group, tr = ar + 1;
+        size_t ai = ar + 2, ti = ar + 3;
+        size_t even_base = even_bins[group] * FFT_GEMMINI_BATCHES;
+        size_t odd_base = odd_bins[group] * FFT_GEMMINI_BATCHES;
+        for (size_t batch = 0; batch < FFT_GEMMINI_BATCHES; ++batch) {
+            native_butterfly_x[ar][batch] = data_real[even_base + batch];
+            native_butterfly_x[ai][batch] = data_imag[even_base + batch];
+            if (unity) {
+                native_butterfly_x[tr][batch] = data_real[odd_base + batch];
+                native_butterfly_x[ti][batch] = data_imag[odd_base + batch];
+            } else {
+                native_butterfly_x[tr][batch] =
+                    native_twiddle_y[2 * (twiddle_lane + group)][batch];
+                native_butterfly_x[ti][batch] =
+                    native_twiddle_y[2 * (twiddle_lane + group) + 1][batch];
+            }
+        }
+    }
+
+    tiled_matmul_auto(FFT_GEMMINI_TILE_DIM, FFT_GEMMINI_BATCHES,
+        FFT_GEMMINI_TILE_DIM, &native_butterfly_weights[0][0],
+        &native_butterfly_x[0][0], NULL, &native_butterfly_y[0][0],
+        FFT_GEMMINI_TILE_DIM, FFT_GEMMINI_BATCHES,
+        FFT_GEMMINI_BATCHES, FFT_GEMMINI_BATCHES,
+        MVIN_SCALE_IDENTITY, MVIN_SCALE_IDENTITY, MVIN_SCALE_IDENTITY,
+        NO_ACTIVATION, 0.5f, 0,
+        false, false, false, false, false, 0, WS);
+
+    for (size_t group = 0; group < count; ++group) {
+        size_t ar = 4 * group, lower_r = ar + 1;
+        size_t ai = ar + 2, lower_i = ar + 3;
+        size_t even_base = even_bins[group] * FFT_GEMMINI_BATCHES;
+        size_t odd_base = odd_bins[group] * FFT_GEMMINI_BATCHES;
+        for (size_t batch = 0; batch < FFT_GEMMINI_BATCHES; ++batch) {
+            data_real[even_base + batch] = native_butterfly_y[ar][batch];
+            data_imag[even_base + batch] = native_butterfly_y[ai][batch];
+            data_real[odd_base + batch] = native_butterfly_y[lower_r][batch];
+            data_imag[odd_base + batch] = native_butterfly_y[lower_i][batch];
+        }
+    }
+}
+
+static void native_unity_butterflies(size_t bs)
+{
+    uint16_t even_bins[FFT_GEMMINI_FUSED_GROUPS];
+    uint16_t odd_bins[FFT_GEMMINI_FUSED_GROUPS];
+    size_t half = bs >> 1, count = 0;
+    for (size_t block = 0; block < FFT_INT8_SIZE; block += bs) {
+        even_bins[count] = (uint16_t)block;
+        odd_bins[count] = (uint16_t)(block + half);
+        if (++count == FFT_GEMMINI_FUSED_GROUPS) {
+            native_butterfly_apply(count, even_bins, odd_bins, 0, 1);
+            count = 0;
+        }
+    }
+    if (count != 0)
+        native_butterfly_apply(count, even_bins, odd_bins, 0, 1);
+}
+
+static void gemmini_stage_native(unsigned stage)
+{
+    size_t begin = stage_tile_start[stage];
+    size_t end = begin + stage_tile_count[stage];
+    for (size_t tile_index = begin; tile_index < end; ++tile_index) {
+        const gemmini_twiddle_tile_t *tile = &twiddle_tiles[tile_index];
+        size_t count = tile->count;
+        clear_input_tile();
+        for (size_t lane = 0; lane < count; ++lane) {
+            size_t odd = tile->odd_bins[lane];
+            size_t r = 2 * lane, i = r + 1;
+            for (size_t batch = 0; batch < FFT_GEMMINI_BATCHES; ++batch) {
+                size_t pos = odd * FFT_GEMMINI_BATCHES + batch;
+                matrix_x[r][batch] = data_real[pos];
+                matrix_x[i][batch] = data_imag[pos];
+            }
+        }
+
+        tiled_matmul_auto(FFT_GEMMINI_TILE_DIM, FFT_GEMMINI_BATCHES,
+            FFT_GEMMINI_TILE_DIM, &tile->weights[0][0], &matrix_x[0][0], NULL,
+            &native_twiddle_y[0][0], FFT_GEMMINI_TILE_DIM,
+            FFT_GEMMINI_BATCHES, FFT_GEMMINI_BATCHES, FFT_GEMMINI_BATCHES,
+            MVIN_SCALE_IDENTITY, MVIN_SCALE_IDENTITY, MVIN_SCALE_IDENTITY,
+            NO_ACTIVATION, 1.0f / 128.0f, 0,
+            false, false, false, false, false, 0, WS);
+
+        for (size_t lane = 0; lane < count; ++lane) {
+            if (tile->wi[lane] != INT8_MIN) continue;
+            size_t odd_base = tile->odd_bins[lane] * FFT_GEMMINI_BATCHES;
+            size_t r = 2 * lane, i = r + 1;
+            for (size_t batch = 0; batch < FFT_GEMMINI_BATCHES; ++batch) {
+                int32_t br = data_real[odd_base + batch];
+                int32_t bi = data_imag[odd_base + batch];
+                int32_t wr = tile->weights[r][r];
+                int32_t wi = tile->wi[lane];
+                native_twiddle_y[r][batch] =
+                    gemmini_scaled_reference(wr * br - wi * bi,
+                                              1.0f / 128.0f);
+                native_twiddle_y[i][batch] =
+                    gemmini_scaled_reference(wi * br + wr * bi,
+                                              1.0f / 128.0f);
+            }
+        }
+
+        for (size_t first = 0; first < count;
+             first += FFT_GEMMINI_FUSED_GROUPS) {
+            size_t group_count = count - first;
+            if (group_count > FFT_GEMMINI_FUSED_GROUPS)
+                group_count = FFT_GEMMINI_FUSED_GROUPS;
+            native_butterfly_apply(group_count,
+                &tile->even_bins[first], &tile->odd_bins[first], first, 0);
+        }
+    }
+}
+
+static void run_fft_gemmini_native(void)
+{
+    bit_reverse();
+    unsigned stage = 0;
+    for (size_t bs = 2; bs <= FFT_INT8_SIZE; bs <<= 1, ++stage) {
+        native_unity_butterflies(bs);
+        if (stage_tile_count[stage] != 0) gemmini_stage_native(stage);
     }
 }
 
@@ -466,6 +670,116 @@ static size_t count_mismatches(void)
     return mismatches;
 }
 
+static int validate_gemmini_scaling(void)
+{
+    static elem_t a[FFT_GEMMINI_TILE_DIM][FFT_GEMMINI_TILE_DIM]
+        __attribute__((aligned(64)));
+    static elem_t b[FFT_GEMMINI_TILE_DIM][FFT_GEMMINI_TILE_DIM]
+        __attribute__((aligned(64)));
+    static elem_t c[FFT_GEMMINI_TILE_DIM][FFT_GEMMINI_TILE_DIM]
+        __attribute__((aligned(64)));
+    static const int8_t butterfly_inputs[FFT_GEMMINI_TILE_DIM][2] = {
+        {1, 0}, {2, 1}, {-2, -1}, {127, 127},
+        {-128, -128}, {127, -128}, {-128, 127}, {1, -2},
+        {-1, 2}, {5, 0}, {-5, 0}, {126, 127},
+        {-127, -128}, {64, 63}, {-64, -63}, {0, -128},
+    };
+
+    for (size_t row = 0; row < FFT_GEMMINI_TILE_DIM; ++row)
+        for (size_t col = 0; col < FFT_GEMMINI_TILE_DIM; ++col) {
+            a[row][col] = (int8_t)(((row * 17 + col * 29) % 255) - 128);
+            b[row][col] = (int8_t)(((row * 31 + col * 13) % 255) - 128);
+            c[row][col] = 0;
+        }
+    for (size_t k = 0; k < FFT_GEMMINI_TILE_DIM; ++k) a[0][k] = 0;
+    a[0][0] = 1;
+    b[0][0] = 64;
+    b[0][1] = -64;
+
+    tiled_matmul_auto(FFT_GEMMINI_TILE_DIM, FFT_GEMMINI_TILE_DIM,
+        FFT_GEMMINI_TILE_DIM, &a[0][0], &b[0][0], NULL, &c[0][0],
+        FFT_GEMMINI_TILE_DIM, FFT_GEMMINI_TILE_DIM,
+        FFT_GEMMINI_TILE_DIM, FFT_GEMMINI_TILE_DIM,
+        MVIN_SCALE_IDENTITY, MVIN_SCALE_IDENTITY, MVIN_SCALE_IDENTITY,
+        NO_ACTIVATION, 1.0f / 128.0f, 0,
+        false, false, false, false, false, 0, WS);
+
+    size_t matmul_native_mismatches = 0, matmul_rnu_differences = 0;
+    for (size_t row = 0; row < FFT_GEMMINI_TILE_DIM; ++row)
+        for (size_t col = 0; col < FFT_GEMMINI_TILE_DIM; ++col) {
+            int32_t sum = 0;
+            for (size_t k = 0; k < FFT_GEMMINI_TILE_DIM; ++k)
+                sum += (int32_t)a[row][k] * b[k][col];
+            int8_t native = gemmini_scaled_reference(sum, 1.0f / 128.0f);
+            int8_t rnu = saturate_i8(rnu_shift(sum, 7));
+            if (c[row][col] != native) ++matmul_native_mismatches;
+            if (native != rnu) ++matmul_rnu_differences;
+        }
+
+    for (size_t row = 0; row < FFT_GEMMINI_TILE_DIM; ++row)
+        for (size_t col = 0; col < FFT_GEMMINI_TILE_DIM; ++col) {
+            a[row][col] = 0;
+            b[row][col] = 0;
+            c[row][col] = 0;
+        }
+    for (size_t pair = 0; pair < FFT_GEMMINI_TILE_BUTTERFLIES; ++pair) {
+        size_t upper = 2 * pair, lower = upper + 1;
+        a[upper][upper] = 1;
+        a[upper][lower] = 1;
+        a[lower][upper] = 1;
+        a[lower][lower] = -1;
+    }
+    for (size_t col = 0; col < FFT_GEMMINI_TILE_DIM; ++col) {
+        for (size_t pair = 0; pair < FFT_GEMMINI_TILE_BUTTERFLIES; ++pair) {
+            b[2 * pair][col] = butterfly_inputs[col][0];
+            b[2 * pair + 1][col] = butterfly_inputs[col][1];
+        }
+    }
+
+    tiled_matmul_auto(FFT_GEMMINI_TILE_DIM, FFT_GEMMINI_TILE_DIM,
+        FFT_GEMMINI_TILE_DIM, &a[0][0], &b[0][0], NULL, &c[0][0],
+        FFT_GEMMINI_TILE_DIM, FFT_GEMMINI_TILE_DIM,
+        FFT_GEMMINI_TILE_DIM, FFT_GEMMINI_TILE_DIM,
+        MVIN_SCALE_IDENTITY, MVIN_SCALE_IDENTITY, MVIN_SCALE_IDENTITY,
+        NO_ACTIVATION, 0.5f, 0,
+        false, false, false, false, false, 0, WS);
+
+    size_t butterfly_native_mismatches = 0, butterfly_rnu_differences = 0;
+    for (size_t col = 0; col < FFT_GEMMINI_TILE_DIM; ++col) {
+        int32_t input_a = butterfly_inputs[col][0];
+        int32_t input_t = butterfly_inputs[col][1];
+        int8_t native_upper =
+            gemmini_scaled_reference(input_a + input_t, 0.5f);
+        int8_t native_lower =
+            gemmini_scaled_reference(input_a - input_t, 0.5f);
+        int8_t rnu_upper = (int8_t)rnu_shift(input_a + input_t, 1);
+        int8_t rnu_lower = (int8_t)rnu_shift(input_a - input_t, 1);
+        for (size_t pair = 0; pair < FFT_GEMMINI_TILE_BUTTERFLIES; ++pair) {
+            if (c[2 * pair][col] != native_upper ||
+                c[2 * pair + 1][col] != native_lower)
+                ++butterfly_native_mismatches;
+        }
+        if (native_upper != rnu_upper || native_lower != rnu_lower)
+            ++butterfly_rnu_differences;
+    }
+
+    printf("Gemmini scaling validation:\n");
+    printf("  matmul native-reference mismatches: %u / %u\n",
+        (unsigned)matmul_native_mismatches,
+        FFT_GEMMINI_TILE_DIM * FFT_GEMMINI_TILE_DIM);
+    printf("  matmul native-vs-RNU differences: %u / %u\n",
+        (unsigned)matmul_rnu_differences,
+        FFT_GEMMINI_TILE_DIM * FFT_GEMMINI_TILE_DIM);
+    printf("  butterfly native-reference mismatches: %u / %u\n",
+        (unsigned)butterfly_native_mismatches,
+        FFT_GEMMINI_TILE_DIM * FFT_GEMMINI_TILE_BUTTERFLIES);
+    printf("  butterfly native-vs-RNU cases: %u / %u\n",
+        (unsigned)butterfly_rnu_differences, FFT_GEMMINI_TILE_DIM);
+
+    return matmul_native_mismatches == 0 &&
+           butterfly_native_mismatches == 0;
+}
+
 static uint64_t benchmark_variant(const char *name, void (*function)(void),
                                   size_t *mismatches)
 {
@@ -489,6 +803,37 @@ static uint64_t benchmark_variant(const char *name, void (*function)(void),
     return average;
 }
 
+static uint64_t benchmark_native_variant(size_t *mismatches)
+{
+    uint64_t total = 0;
+    gemmini_flush(0);
+    for (unsigned run = 0; run < FFT_GEMMINI_RUNS; ++run) {
+        load_input();
+        uint64_t start = read_cycles();
+        run_fft_gemmini_native();
+        total += read_cycles() - start;
+    }
+
+    *mismatches = 0;
+    for (size_t bin = 0; bin < FFT_INT8_SIZE; ++bin)
+        for (size_t batch = 0; batch < FFT_GEMMINI_BATCHES; ++batch) {
+            size_t pos = bin * FFT_GEMMINI_BATCHES + batch;
+            if (data_real[pos] != native_reference_real[bin] ||
+                data_imag[pos] != native_reference_imag[bin])
+                ++*mismatches;
+        }
+
+    uint64_t average = total / FFT_GEMMINI_RUNS;
+    printf("\nGemmini variant: native-scaling\nbenchmark runs: %u\n",
+        FFT_GEMMINI_RUNS);
+    printf("average FFT cycles: %lu\n", (unsigned long)average);
+    printf("native-reference mismatched complex points: %u / %u\n",
+        (unsigned)*mismatches, FFT_INT8_SIZE * FFT_GEMMINI_BATCHES);
+    printf("FFT int8 Gemmini native-scaling: %s\n",
+        *mismatches == 0 ? "PASS" : "FAIL");
+    return average;
+}
+
 int main(void)
 {
     uint64_t plan_start = read_cycles();
@@ -497,24 +842,37 @@ int main(void)
     printf("FFT size: %u\nbatches: %u\nGemmini butterflies/tile: %u\n",
         FFT_INT8_SIZE, FFT_GEMMINI_BATCHES, FFT_GEMMINI_TILE_BUTTERFLIES);
     printf("twiddle plan cycles: %lu\n", (unsigned long)plan_cycles);
+    make_native_reference();
     size_t baseline_mismatches = 0, fused_mismatches = 0;
+    size_t native_mismatches = 0;
     benchmark_variant("baseline", run_fft, &baseline_mismatches);
     benchmark_variant(
         "stage-fused", run_fft_stage_fused, &fused_mismatches);
+    benchmark_native_variant(&native_mismatches);
+    int scaling_ok = validate_gemmini_scaling();
 
-    size_t reports = 0;
-    for (size_t bin = 0; bin < FFT_INT8_SIZE; ++bin)
-        for (size_t batch = 0; batch < FFT_GEMMINI_BATCHES; ++batch) {
-            size_t pos = bin * FFT_GEMMINI_BATCHES + batch;
-            if (data_real[pos] == fft_int8_groundtruth_real[bin] &&
-                data_imag[pos] == fft_int8_groundtruth_imag[bin]) continue;
-            if (reports++ < FFT_GEMMINI_MAX_REPORTS)
-                printf("mismatch batch %u bin %u: actual %d %dj expected %d %dj\n",
-                    (unsigned)batch, (unsigned)bin, data_real[pos], data_imag[pos],
-                    fft_int8_groundtruth_real[bin], fft_int8_groundtruth_imag[bin]);
-        }
-    int ok = baseline_mismatches == 0 && fused_mismatches == 0;
-    printf("FFT batched int8 Gemmini: %s (bit-exact Q7 validation)\n",
+    if (fused_mismatches != 0) {
+        load_input();
+        run_fft_stage_fused();
+        size_t reports = 0;
+        for (size_t bin = 0; bin < FFT_INT8_SIZE; ++bin)
+            for (size_t batch = 0; batch < FFT_GEMMINI_BATCHES; ++batch) {
+                size_t pos = bin * FFT_GEMMINI_BATCHES + batch;
+                if (data_real[pos] == fft_int8_groundtruth_real[bin] &&
+                    data_imag[pos] == fft_int8_groundtruth_imag[bin]) continue;
+                if (reports++ < FFT_GEMMINI_MAX_REPORTS)
+                    printf("mismatch batch %u bin %u: actual %d %dj "
+                           "expected %d %dj\n",
+                        (unsigned)batch, (unsigned)bin,
+                        data_real[pos], data_imag[pos],
+                        fft_int8_groundtruth_real[bin],
+                        fft_int8_groundtruth_imag[bin]);
+            }
+    }
+    int ok = scaling_ok && baseline_mismatches == 0 &&
+             fused_mismatches == 0 && native_mismatches == 0;
+    printf("FFT batched int8 Gemmini: %s "
+           "(Q7 and native-scaling validation)\n",
         ok ? "PASS" : "FAIL");
     return ok ? 0 : 1;
 }

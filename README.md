@@ -368,13 +368,16 @@ The FFT target combines eight complex twiddle rotations in each 16x16 Gemmini
 tile, processes 64 batches per matrix multiplication, runs 10 iterations, and
 validates all 65,536 complex points against the shared Q7 ground truth. The
 current RV64GC Gemmini Spike reference passes bit-exact validation with zero
-mismatches and averages 15,489,596 cycles for the complete FFT region. This
+mismatches and averages 15,288,837 cycles for the complete FFT region. This
 includes bit reversal, matrix packing, Gemmini execution/readback, and scalar
 Q7 post-processing, but excludes input reload and one-time construction of the
 513 prepacked Gemmini twiddle tiles.
 The block-diagonal butterfly mapping, Q7 correction, and host/accelerator split
 are documented in
 [`testbench/fft_batched_int8_gemmini/README.md`](testbench/fft_batched_int8_gemmini/README.md).
+The consolidated CPU/RVV/Gemmini FP32 and INT8 hardware comparison, including
+cycles, milliseconds, fusion effects, and speedup ratios, is maintained in
+[`testbench/fft/README.md`](testbench/fft/README.md#batched-fft-cross-architecture-comparison).
 
 The current native/per-tensor reference produces INT8 logit `23` and a correct
 classification on both Spike/pk and Gemmini hardware. The recorded hardware
