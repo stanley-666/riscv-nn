@@ -97,12 +97,12 @@ uses the same two-step Q7 arithmetic as the CPU and RVV implementations:
 
 $$
 \begin{aligned}
-\hat t_r &= \operatorname{sat}_{int8}
-  \left(\operatorname{RNU}(Y_r/2^7)\right),\\
-\hat t_i &= \operatorname{sat}_{int8}
-  \left(\operatorname{RNU}(Y_i/2^7)\right),\\
-u &= \operatorname{RNU}((a+\hat t)/2),\\
-l &= \operatorname{RNU}((a-\hat t)/2).
+\hat{t}_r &= \operatorname{sat}_{\mathrm{int8}}
+  \left(\operatorname{RNU}\left(\frac{Y_r}{2^7}\right)\right), \\
+\hat{t}_i &= \operatorname{sat}_{\mathrm{int8}}
+  \left(\operatorname{RNU}\left(\frac{Y_i}{2^7}\right)\right), \\
+u &= \operatorname{RNU}\left(\frac{a+\hat{t}}{2}\right), \\
+l &= \operatorname{RNU}\left(\frac{a-\hat{t}}{2}\right).
 \end{aligned}
 $$
 
