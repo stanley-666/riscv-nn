@@ -31,6 +31,11 @@ only the second-stage outputs are written to the global FFT data buffers. The
 fused path therefore removes the global intermediate stage store/reload but
 does not remove either stage's numerical conversion.
 
+The binary additionally measures a hardware-optimized dense mixed-radix
+4/16/16 FFT. This is kept separate from the controlled radix-2 comparison.
+It maps each radix transform to a dense real 8x8 or 32x32 WS matrix and
+combines every applicable block with all 64 batches in the matrix columns.
+
 ## Mapping radix-2 FFT to Gemmini
 
 The implementation remains a radix-2 decimation-in-time FFT with
@@ -150,6 +155,30 @@ next radix-2 stage
 Thus Gemmini accelerates the batched complex twiddle multiplications, while the
 host retains bit reversal, packing, exact fixed-point conversion, and final
 butterfly add/subtract operations.
+
+### Dense mixed-radix 4/16/16 dataflow
+
+Since $1024=4\times16\times16$, the hardware-optimized variant executes one
+radix-4 stage followed by two radix-16 stages. For radix $r$, one complex
+transform is represented as a dense $2r\times2r$ real matrix:
+
+$$
+\begin{bmatrix}Y_r\\Y_i\end{bmatrix}
+=
+\begin{bmatrix}W_r&-W_i\\W_i&W_r\end{bmatrix}
+\begin{bmatrix}X_r\\X_i\end{bmatrix}.
+$$
+
+All FFT blocks sharing the same stage offset and all 64 batches are packed
+into the column dimension. The three stages require 1, 4, and 64 dense
+transform calls respectively, or 69 calls per FFT. Unlike the radix-2
+block-diagonal mapping, the transform weights are dense.
+
+The mixed-radix path scales by $1/r$ after each radix stage. It therefore has
+three Q7 rounding boundaries rather than the radix-2 path's ten boundaries.
+It is checked bit-exactly against an independent scalar mixed-radix reference
+and its numerical difference from the radix-2 reference is reported
+separately.
 
 ### Two-stage-fused Gemmini dataflow
 
@@ -285,6 +314,17 @@ benchmark runs: 10
 average FFT cycles: 15288837
 mismatched complex points: 0 / 65536
 FFT int8 Gemmini baseline: PASS
+
+Gemmini variant: mixed-radix-4-16-16
+benchmark runs: 10
+dense transform calls per FFT: 69
+average FFT cycles: 6787804
+mixed-radix-reference mismatched complex points: 0 / 65536
+radix-2-groundtruth differing complex points: 49408 / 65536
+radix-2-groundtruth points within +/-1 per component: 60992 / 65536
+radix-2-groundtruth mean absolute component error x1000: 533
+radix-2-groundtruth maximum component error: 3
+FFT int8 Gemmini mixed-radix-4-16-16: PASS
 
 Gemmini variant: stage-fused
 benchmark runs: 10

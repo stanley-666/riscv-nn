@@ -83,6 +83,24 @@ Scalar stage fusion improves the butterfly region by `1.10x`. For a fair RVV
 comparison, baseline CPU should be compared with baseline RVV, and fused CPU
 with fused RVV.
 
+### Dense mixed-radix Spike ablation
+
+The CPU binary also runs the same dense mixed-radix 4/16/16 algorithm used by
+the RVV and Gemmini experiments. This is a hardware-aware ablation, not a
+replacement for the controlled radix-2 result.
+
+| Scalar CPU Spike variant | FFT cycles | Relative to radix-2 |
+| --- | ---: | ---: |
+| Radix-2 baseline | **19,377,049** | 1.00x |
+| Dense mixed radix 4/16/16 | 56,838,101 | **2.93x slower** |
+
+The mixed-radix result has 0 / 65,536 mismatches against the shared scalar
+mixed-radix reference. Relative to the radix-2 Q7 output, 60,992 / 65,536
+complex points have both components within +/-1, the mean absolute component
+difference is 0.533, and the maximum component difference is 3. Direct dense
+radix transforms increase scalar operation count, so fewer stages do not
+compensate for the additional MACs on the CPU.
+
 ### Current 50 MHz Genesys2 pure-CPU result
 
 This cold-cache bare-metal result uses the same 10-run averaging and bit-exact

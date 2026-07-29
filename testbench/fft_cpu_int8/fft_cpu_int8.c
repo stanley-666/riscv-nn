@@ -10,6 +10,7 @@
 
 #include "fft_cpu_int8_runner.h"
 #include "fft_int8_vectors.h"
+#include "../fft_batched_int8/fft_mixed_radix_q7.h"
 #include "nn_runtime.h"
 
 #define FFT_CPU_INT8_BATCH_COUNT 64
@@ -312,12 +313,97 @@ static int run_cpu_q7_variant(fft_cpu_plan_q7_t *plan, const char *name,
     return mismatches == 0;
 }
 
+static int run_cpu_mixed_radix_variant(
+    fft_cpu_plan_q7_t *plan, const fft_mixed_q7_plan_t *mixed_plan)
+{
+    int8_t reference_real[FFT_INT8_SIZE];
+    int8_t reference_imag[FFT_INT8_SIZE];
+    for (size_t bin = 0; bin < plan->size; ++bin) {
+        reference_real[bin] = fft_int8_input_real[bin];
+        reference_imag[bin] = fft_int8_input_imag[bin];
+    }
+    fft_mixed_q7_scalar(
+        mixed_plan, reference_real, reference_imag, plan->size);
+
+    uint64_t layout = 0, fft = 0;
+    for (unsigned run = 0; run < FFT_CPU_INT8_BENCHMARK_RUNS; ++run) {
+        uint64_t begin = nn_runtime_read_cycles();
+        fft_cpu_plan_load_input_q7(plan);
+        uint64_t layout_end = nn_runtime_read_cycles();
+        for (size_t batch = 0; batch < plan->batch_count; ++batch) {
+            size_t base = batch * plan->size;
+            fft_mixed_q7_scalar(mixed_plan, &plan->data_real[base],
+                &plan->data_imag[base], plan->size);
+        }
+        uint64_t end = nn_runtime_read_cycles();
+        layout += layout_end - begin;
+        fft += end - layout_end;
+    }
+    layout /= FFT_CPU_INT8_BENCHMARK_RUNS;
+    fft /= FFT_CPU_INT8_BENCHMARK_RUNS;
+
+    size_t reference_mismatches = 0, radix2_differences = 0;
+    size_t within_one = 0;
+    uint64_t absolute_error_sum = 0;
+    unsigned max_component_error = 0;
+    for (size_t batch = 0; batch < plan->batch_count; ++batch) {
+        size_t base = batch * plan->size;
+        for (size_t bin = 0; bin < plan->size; ++bin) {
+            int8_t actual_real = plan->data_real[base + bin];
+            int8_t actual_imag = plan->data_imag[base + bin];
+            if (actual_real != reference_real[bin] ||
+                actual_imag != reference_imag[bin])
+                ++reference_mismatches;
+            if (actual_real != fft_int8_groundtruth_real[bin] ||
+                actual_imag != fft_int8_groundtruth_imag[bin])
+                ++radix2_differences;
+            int real_error =
+                (int)actual_real - fft_int8_groundtruth_real[bin];
+            int imag_error =
+                (int)actual_imag - fft_int8_groundtruth_imag[bin];
+            if (real_error < 0) real_error = -real_error;
+            if (imag_error < 0) imag_error = -imag_error;
+            absolute_error_sum += (unsigned)real_error + (unsigned)imag_error;
+            if (real_error <= 1 && imag_error <= 1) ++within_one;
+            if ((unsigned)real_error > max_component_error)
+                max_component_error = (unsigned)real_error;
+            if ((unsigned)imag_error > max_component_error)
+                max_component_error = (unsigned)imag_error;
+        }
+    }
+
+    printf("\nCPU int8 variant: mixed-radix-4-16-16\n");
+    printf("benchmark runs: %u\n", FFT_CPU_INT8_BENCHMARK_RUNS);
+    printf("dense transforms per FFT: %u\n", (unsigned)mixed_plan->count);
+    printf("average input layout cycles: "); print_u64_decimal(layout);
+    printf("\naverage FFT cycles: "); print_u64_decimal(fft);
+    printf("\nmixed-radix-reference mismatched complex points: %u / %u\n",
+        (unsigned)reference_mismatches,
+        (unsigned)(plan->size * plan->batch_count));
+    printf("radix-2-groundtruth differing complex points: %u / %u\n",
+        (unsigned)radix2_differences,
+        (unsigned)(plan->size * plan->batch_count));
+    printf("radix-2-groundtruth points within +/-1 per component: %u / %u\n",
+        (unsigned)within_one,
+        (unsigned)(plan->size * plan->batch_count));
+    printf("radix-2-groundtruth mean absolute component error x1000: %lu\n",
+        (unsigned long)(absolute_error_sum * 1000 /
+            (2 * plan->size * plan->batch_count)));
+    printf("radix-2-groundtruth maximum component error: %u\n",
+        max_component_error);
+    printf("FFT CPU int8 mixed-radix-4-16-16: %s\n",
+        reference_mismatches == 0 ? "PASS" : "FAIL");
+    return reference_mismatches == 0;
+}
+
 int fft_cpu_int8_testbench_run(void)
 {
     fft_cpu_plan_q7_t plan;
+    static fft_mixed_q7_plan_t mixed_plan;
     uint64_t plan_start = nn_runtime_read_cycles();
     int plan_ok = fft_cpu_plan_init_q7(
         &plan, FFT_INT8_SIZE, FFT_CPU_INT8_BATCH_COUNT);
+    fft_mixed_q7_plan_init(&mixed_plan);
     uint64_t plan_end = nn_runtime_read_cycles();
     if (!plan_ok) {
         printf("FFT CPU int8: FAIL (invalid plan)\n");
@@ -332,6 +418,7 @@ int fft_cpu_int8_testbench_run(void)
     printf("\n");
     int baseline_ok = run_cpu_q7_variant(
         &plan, "baseline", plan_cycles, fft_cpu_butterflies_q7);
+    int mixed_ok = run_cpu_mixed_radix_variant(&plan, &mixed_plan);
     int fused_ok = 0;
     if ((plan.stage_count & 1u) == 0u)
         fused_ok = run_cpu_q7_variant(
@@ -376,7 +463,7 @@ int fft_cpu_int8_testbench_run(void)
     if (mismatches > reported) printf("mismatch report truncated: showed first %u of %u points\n",
         (unsigned)reported, (unsigned)mismatches);
 
-    if (!baseline_ok || !fused_ok || mismatches != 0) {
+    if (!baseline_ok || !mixed_ok || !fused_ok || mismatches != 0) {
         printf("FFT CPU int8: FAIL (bit-exact Q7 validation)\n");
         fft_cpu_plan_destroy_q7(&plan);
         return 1;

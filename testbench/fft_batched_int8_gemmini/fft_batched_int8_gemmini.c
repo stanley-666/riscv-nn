@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Scaled Q7 radix-2 FFT with eight twiddle rotations per Gemmini tile. */
+/* Scaled Q7 radix-2 and dense mixed-radix FFT experiments for Gemmini WS. */
 
 #define _DEFAULT_SOURCE
 
@@ -21,6 +21,11 @@
 #define FFT_GEMMINI_MAX_TILES 513
 #define FFT_GEMMINI_FUSED_GROUPS 4
 #define FFT_GEMMINI_MAX_FUSED_TILES 512
+#define FFT_GEMMINI_RADIX_MAX 16
+#define FFT_GEMMINI_RADIX_REAL_DIM (2 * FFT_GEMMINI_RADIX_MAX)
+#define FFT_GEMMINI_RADIX_TRANSFORMS 69
+#define FFT_GEMMINI_RADIX_MAX_COLUMNS \
+    ((FFT_INT8_SIZE / 4) * FFT_GEMMINI_BATCHES)
 
 typedef struct __attribute__((aligned(64))) {
     elem_t weights[FFT_GEMMINI_TILE_DIM][FFT_GEMMINI_TILE_DIM];
@@ -40,6 +45,17 @@ typedef struct __attribute__((aligned(64))) {
     uint8_t count;
     uint8_t unity;
 } gemmini_fused_tile_t;
+
+typedef struct __attribute__((aligned(64))) {
+    elem_t weights[FFT_GEMMINI_RADIX_REAL_DIM]
+                  [FFT_GEMMINI_RADIX_REAL_DIM];
+    uint16_t span;
+    uint16_t previous_span;
+    uint16_t column_count;
+    uint8_t radix;
+    uint8_t log2_radix;
+    uint8_t offset;
+} gemmini_radix_transform_t;
 
 static int8_t data_real[FFT_INT8_SIZE * FFT_GEMMINI_BATCHES]
     __attribute__((aligned(64)));
@@ -73,6 +89,18 @@ static int8_t fused_real[FFT_GEMMINI_TILE_DIM][FFT_GEMMINI_BATCHES]
     __attribute__((aligned(64)));
 static int8_t fused_imag[FFT_GEMMINI_TILE_DIM][FFT_GEMMINI_BATCHES]
     __attribute__((aligned(64)));
+static gemmini_radix_transform_t
+    radix_transforms[FFT_GEMMINI_RADIX_TRANSFORMS]
+    __attribute__((aligned(64)));
+static elem_t radix_matrix_x[FFT_GEMMINI_RADIX_REAL_DIM]
+                            [FFT_GEMMINI_RADIX_MAX_COLUMNS]
+    __attribute__((aligned(64)));
+static acc_t radix_matrix_y[FFT_GEMMINI_RADIX_REAL_DIM]
+                           [FFT_GEMMINI_RADIX_MAX_COLUMNS]
+    __attribute__((aligned(64)));
+static int8_t radix_reference_real[FFT_INT8_SIZE];
+static int8_t radix_reference_imag[FFT_INT8_SIZE];
+static uint16_t radix_transform_count;
 
 static int8_t gemmini_scaled_reference(int32_t value, acc_scale_t scale)
 {
@@ -220,6 +248,43 @@ static void make_twiddle_plan(void)
     }
     fused_tile_count = (uint16_t)fused_next;
 
+    static const uint8_t radices[] = {4, 16, 16};
+    static const uint8_t log2_radices[] = {2, 4, 4};
+    size_t radix_next = 0;
+    size_t previous_span = 1;
+    for (size_t stage = 0; stage < 3; ++stage) {
+        size_t radix = radices[stage];
+        size_t span = previous_span * radix;
+        size_t blocks = FFT_INT8_SIZE / span;
+        size_t columns = blocks * FFT_GEMMINI_BATCHES;
+        for (size_t offset = 0; offset < previous_span; ++offset) {
+            gemmini_radix_transform_t *transform =
+                &radix_transforms[radix_next++];
+            transform->span = (uint16_t)span;
+            transform->previous_span = (uint16_t)previous_span;
+            transform->column_count = (uint16_t)columns;
+            transform->radix = (uint8_t)radix;
+            transform->log2_radix = log2_radices[stage];
+            transform->offset = (uint8_t)offset;
+            for (size_t output = 0; output < radix; ++output)
+                for (size_t input = 0; input < radix; ++input) {
+                    float angle =
+                        -2.0f * (float)M_PI * (float)input *
+                        (float)(output * previous_span + offset) /
+                        (float)span;
+                    int8_t wr = quantize_q7(cosf(angle));
+                    int8_t wi = quantize_q7(sinf(angle));
+                    transform->weights[output][input] = wr;
+                    transform->weights[output][radix + input] =
+                        quantize_q7(-sinf(angle));
+                    transform->weights[radix + output][input] = wi;
+                    transform->weights[radix + output][radix + input] = wr;
+                }
+        }
+        previous_span = span;
+    }
+    radix_transform_count = (uint16_t)radix_next;
+
     for (size_t group = 0; group < FFT_GEMMINI_FUSED_GROUPS; ++group) {
         size_t ar = 4 * group, tr = ar + 1;
         size_t ai = ar + 2, ti = ar + 3;
@@ -231,6 +296,131 @@ static void make_twiddle_plan(void)
         native_butterfly_weights[ai][ti] = 1;
         native_butterfly_weights[ti][ai] = 1;
         native_butterfly_weights[ti][ti] = -1;
+    }
+}
+
+static size_t mixed_radix_source_index(size_t destination)
+{
+    size_t digit0 = destination & 3;
+    size_t digit1 = (destination >> 2) & 15;
+    size_t digit2 = destination >> 6;
+    return digit0 * 256 + digit1 * 16 + digit2;
+}
+
+static void mixed_radix_permute(void)
+{
+    static int8_t permuted_real[FFT_INT8_SIZE * FFT_GEMMINI_BATCHES]
+        __attribute__((aligned(64)));
+    static int8_t permuted_imag[FFT_INT8_SIZE * FFT_GEMMINI_BATCHES]
+        __attribute__((aligned(64)));
+    for (size_t destination = 0; destination < FFT_INT8_SIZE; ++destination) {
+        size_t source = mixed_radix_source_index(destination);
+        for (size_t batch = 0; batch < FFT_GEMMINI_BATCHES; ++batch) {
+            size_t destination_pos =
+                destination * FFT_GEMMINI_BATCHES + batch;
+            size_t source_pos = source * FFT_GEMMINI_BATCHES + batch;
+            permuted_real[destination_pos] = data_real[source_pos];
+            permuted_imag[destination_pos] = data_imag[source_pos];
+        }
+    }
+    for (size_t pos = 0; pos < FFT_INT8_SIZE * FFT_GEMMINI_BATCHES; ++pos) {
+        data_real[pos] = permuted_real[pos];
+        data_imag[pos] = permuted_imag[pos];
+    }
+}
+
+static void make_mixed_radix_reference(void)
+{
+    for (size_t destination = 0; destination < FFT_INT8_SIZE; ++destination) {
+        size_t source = mixed_radix_source_index(destination);
+        radix_reference_real[destination] = fft_int8_input_real[source];
+        radix_reference_imag[destination] = fft_int8_input_imag[source];
+    }
+
+    for (size_t index = 0; index < radix_transform_count; ++index) {
+        const gemmini_radix_transform_t *transform =
+            &radix_transforms[index];
+        size_t radix = transform->radix;
+        size_t span = transform->span;
+        size_t previous_span = transform->previous_span;
+        size_t offset = transform->offset;
+        for (size_t block = 0; block < FFT_INT8_SIZE; block += span) {
+            int8_t output_real[FFT_GEMMINI_RADIX_MAX];
+            int8_t output_imag[FFT_GEMMINI_RADIX_MAX];
+            for (size_t output = 0; output < radix; ++output) {
+                int32_t real_acc = 0, imag_acc = 0;
+                for (size_t input = 0; input < radix; ++input) {
+                    size_t bin = block + offset + input * previous_span;
+                    int32_t br = radix_reference_real[bin];
+                    int32_t bi = radix_reference_imag[bin];
+                    real_acc += transform->weights[output][input] * br;
+                    real_acc +=
+                        transform->weights[output][radix + input] * bi;
+                    imag_acc +=
+                        transform->weights[radix + output][input] * br;
+                    imag_acc +=
+                        transform->weights[radix + output][radix + input] * bi;
+                }
+                unsigned shift = 7 + transform->log2_radix;
+                output_real[output] =
+                    saturate_i8(rnu_shift(real_acc, shift));
+                output_imag[output] =
+                    saturate_i8(rnu_shift(imag_acc, shift));
+            }
+            for (size_t output = 0; output < radix; ++output) {
+                size_t bin = block + offset + output * previous_span;
+                radix_reference_real[bin] = output_real[output];
+                radix_reference_imag[bin] = output_imag[output];
+            }
+        }
+    }
+}
+
+static void run_fft_mixed_radix(void)
+{
+    mixed_radix_permute();
+    for (size_t index = 0; index < radix_transform_count; ++index) {
+        const gemmini_radix_transform_t *transform =
+            &radix_transforms[index];
+        size_t radix = transform->radix;
+        size_t span = transform->span;
+        size_t previous_span = transform->previous_span;
+        size_t offset = transform->offset;
+        size_t columns = transform->column_count;
+        size_t column = 0;
+        for (size_t block = 0; block < FFT_INT8_SIZE; block += span)
+            for (size_t batch = 0; batch < FFT_GEMMINI_BATCHES;
+                 ++batch, ++column)
+                for (size_t input = 0; input < radix; ++input) {
+                    size_t bin = block + offset + input * previous_span;
+                    size_t pos = bin * FFT_GEMMINI_BATCHES + batch;
+                    radix_matrix_x[input][column] = data_real[pos];
+                    radix_matrix_x[radix + input][column] = data_imag[pos];
+                }
+
+        size_t real_dim = 2 * radix;
+        tiled_matmul_auto(real_dim, columns, real_dim,
+            &transform->weights[0][0], &radix_matrix_x[0][0], NULL,
+            &radix_matrix_y[0][0], FFT_GEMMINI_RADIX_REAL_DIM,
+            FFT_GEMMINI_RADIX_MAX_COLUMNS, FFT_GEMMINI_RADIX_MAX_COLUMNS,
+            FFT_GEMMINI_RADIX_MAX_COLUMNS,
+            MVIN_SCALE_IDENTITY, MVIN_SCALE_IDENTITY, MVIN_SCALE_IDENTITY,
+            NO_ACTIVATION, ACC_SCALE_IDENTITY, 0,
+            false, false, false, true, false, 0, WS);
+
+        column = 0;
+        for (size_t block = 0; block < FFT_INT8_SIZE; block += span)
+            for (size_t batch = 0; batch < FFT_GEMMINI_BATCHES;
+                 ++batch, ++column)
+                for (size_t output = 0; output < radix; ++output) {
+                    size_t bin = block + offset + output * previous_span;
+                    size_t pos = bin * FFT_GEMMINI_BATCHES + batch;
+                    unsigned shift = 7 + transform->log2_radix;
+                    data_real[pos] = saturate_i8(
+                        rnu_shift(radix_matrix_y[output][column], shift));
+                    data_imag[pos] = saturate_i8(rnu_shift(
+                        radix_matrix_y[radix + output][column], shift));
+                }
     }
 }
 
@@ -834,6 +1024,70 @@ static uint64_t benchmark_native_variant(size_t *mismatches)
     return average;
 }
 
+static uint64_t benchmark_mixed_radix_variant(
+    size_t *reference_mismatches, size_t *radix2_mismatches)
+{
+    uint64_t total = 0;
+    gemmini_flush(0);
+    for (unsigned run = 0; run < FFT_GEMMINI_RUNS; ++run) {
+        load_input();
+        uint64_t start = read_cycles();
+        run_fft_mixed_radix();
+        total += read_cycles() - start;
+    }
+
+    *reference_mismatches = 0;
+    *radix2_mismatches = 0;
+    uint64_t absolute_error_sum = 0;
+    size_t within_one = 0;
+    unsigned max_component_error = 0;
+    for (size_t bin = 0; bin < FFT_INT8_SIZE; ++bin)
+        for (size_t batch = 0; batch < FFT_GEMMINI_BATCHES; ++batch) {
+            size_t pos = bin * FFT_GEMMINI_BATCHES + batch;
+            if (data_real[pos] != radix_reference_real[bin] ||
+                data_imag[pos] != radix_reference_imag[bin])
+                ++*reference_mismatches;
+            if (data_real[pos] != fft_int8_groundtruth_real[bin] ||
+                data_imag[pos] != fft_int8_groundtruth_imag[bin])
+                ++*radix2_mismatches;
+            int real_error =
+                (int)data_real[pos] - fft_int8_groundtruth_real[bin];
+            int imag_error =
+                (int)data_imag[pos] - fft_int8_groundtruth_imag[bin];
+            if (real_error < 0) real_error = -real_error;
+            if (imag_error < 0) imag_error = -imag_error;
+            absolute_error_sum += (unsigned)real_error + (unsigned)imag_error;
+            if (real_error <= 1 && imag_error <= 1) ++within_one;
+            if ((unsigned)real_error > max_component_error)
+                max_component_error = (unsigned)real_error;
+            if ((unsigned)imag_error > max_component_error)
+                max_component_error = (unsigned)imag_error;
+        }
+
+    uint64_t average = total / FFT_GEMMINI_RUNS;
+    printf("\nGemmini variant: mixed-radix-4-16-16\n");
+    printf("benchmark runs: %u\n", FFT_GEMMINI_RUNS);
+    printf("dense transform calls per FFT: %u\n",
+        (unsigned)radix_transform_count);
+    printf("average FFT cycles: %lu\n", (unsigned long)average);
+    printf("mixed-radix-reference mismatched complex points: %u / %u\n",
+        (unsigned)*reference_mismatches,
+        FFT_INT8_SIZE * FFT_GEMMINI_BATCHES);
+    printf("radix-2-groundtruth differing complex points: %u / %u\n",
+        (unsigned)*radix2_mismatches,
+        FFT_INT8_SIZE * FFT_GEMMINI_BATCHES);
+    printf("radix-2-groundtruth points within +/-1 per component: %u / %u\n",
+        (unsigned)within_one, FFT_INT8_SIZE * FFT_GEMMINI_BATCHES);
+    printf("radix-2-groundtruth mean absolute component error x1000: %lu\n",
+        (unsigned long)(absolute_error_sum * 1000 /
+            (2 * FFT_INT8_SIZE * FFT_GEMMINI_BATCHES)));
+    printf("radix-2-groundtruth maximum component error: %u\n",
+        max_component_error);
+    printf("FFT int8 Gemmini mixed-radix-4-16-16: %s\n",
+        *reference_mismatches == 0 ? "PASS" : "FAIL");
+    return average;
+}
+
 int main(void)
 {
     uint64_t plan_start = read_cycles();
@@ -843,9 +1097,13 @@ int main(void)
         FFT_INT8_SIZE, FFT_GEMMINI_BATCHES, FFT_GEMMINI_TILE_BUTTERFLIES);
     printf("twiddle plan cycles: %lu\n", (unsigned long)plan_cycles);
     make_native_reference();
+    make_mixed_radix_reference();
     size_t baseline_mismatches = 0, fused_mismatches = 0;
     size_t native_mismatches = 0;
+    size_t radix_reference_mismatches = 0, radix2_differences = 0;
     benchmark_variant("baseline", run_fft, &baseline_mismatches);
+    benchmark_mixed_radix_variant(
+        &radix_reference_mismatches, &radix2_differences);
     benchmark_variant(
         "stage-fused", run_fft_stage_fused, &fused_mismatches);
     benchmark_native_variant(&native_mismatches);
@@ -870,7 +1128,8 @@ int main(void)
             }
     }
     int ok = scaling_ok && baseline_mismatches == 0 &&
-             fused_mismatches == 0 && native_mismatches == 0;
+             fused_mismatches == 0 &&
+             native_mismatches == 0 && radix_reference_mismatches == 0;
     printf("FFT batched int8 Gemmini: %s "
            "(Q7 and native-scaling validation)\n",
         ok ? "PASS" : "FAIL");

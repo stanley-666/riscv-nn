@@ -1,5 +1,14 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Batched radix-2 FFT with vectors spanning the batch dimension. */
+/*
+ * FP32 batched radix-2 FFT layout experiment.
+ *
+ * This file contains floating-point kernels only:
+ *   - bin-major [bin][batch], with RVV lanes spanning batches;
+ *   - batch-major [batch][bin], with RVV lanes spanning FFT bins.
+ *
+ * The separate testbench/fft_batched_int8/ directory contains the Q7/int8
+ * implementation.
+ */
 
 #define _DEFAULT_SOURCE
 
@@ -140,11 +149,35 @@ static void fft_plan_destroy_f32(fft_plan_f32_t *plan)
 
 static int fft_plan_load_input_f32(const fft_plan_f32_t *plan)
 {
+    /*
+     * BIN-MAJOR layout: [bin][batch]
+     * linear offset = bin * batch_count + batch.
+     * Vector lanes span independent FFT batches, allowing one scalar twiddle
+     * to be broadcast across the complete batch vector.
+     */
     for (size_t index = 0; index < plan->size; ++index) {
         size_t row = index * plan->batch_count;
         for (size_t batch = 0; batch < plan->batch_count; ++batch) {
             plan->data_real[row + batch] = input_real[index];
             plan->data_imag[row + batch] = input_imag[index];
+        }
+    }
+    return 1;
+}
+
+static int fft_plan_load_input_batch_major_f32(const fft_plan_f32_t *plan)
+{
+    /*
+     * BATCH-MAJOR layout: [batch][bin]
+     * linear offset = batch * FFT_size + bin.
+     * Vector lanes span consecutive bins of one FFT; twiddles must therefore
+     * be loaded as vectors instead of using one scalar broadcast.
+     */
+    for (size_t batch = 0; batch < plan->batch_count; ++batch) {
+        size_t base = batch * plan->size;
+        for (size_t bin = 0; bin < plan->size; ++bin) {
+            plan->data_real[base + bin] = input_real[bin];
+            plan->data_imag[base + bin] = input_imag[bin];
         }
     }
     return 1;
@@ -308,6 +341,7 @@ static inline int butterfly_unity_batches_rvv_f32(float *even_real,
 
 static int fft_bit_reverse_rvv_f32(const fft_plan_f32_t *plan)
 {
+    /* BIN-MAJOR: swap two contiguous rows, each containing all 64 batches. */
     for (size_t index = 0; index < plan->size; ++index) {
         size_t reversed = reverse_bits((unsigned)index, plan->stage_count);
         if (reversed <= index) continue;
@@ -316,6 +350,25 @@ static int fft_bit_reverse_rvv_f32(const fft_plan_f32_t *plan)
         if (!swap_rows_e32m1(&plan->data_real[a], &plan->data_imag[a],
                              &plan->data_real[b], &plan->data_imag[b],
                              plan->batch_count)) return 0;
+    }
+    return 1;
+}
+
+static int fft_bit_reverse_batch_major_f32(const fft_plan_f32_t *plan)
+{
+    /* BATCH-MAJOR: bit-reverse each batch's contiguous FFT independently. */
+    for (size_t batch = 0; batch < plan->batch_count; ++batch) {
+        size_t base = batch * plan->size;
+        for (size_t bin = 0; bin < plan->size; ++bin) {
+            size_t reversed = reverse_bits((unsigned)bin, plan->stage_count);
+            if (reversed <= bin) continue;
+            float tmp = plan->data_real[base + bin];
+            plan->data_real[base + bin] = plan->data_real[base + reversed];
+            plan->data_real[base + reversed] = tmp;
+            tmp = plan->data_imag[base + bin];
+            plan->data_imag[base + bin] = plan->data_imag[base + reversed];
+            plan->data_imag[base + reversed] = tmp;
+        }
     }
     return 1;
 }
@@ -362,6 +415,65 @@ static int fft_butterflies_rvv_f32(const fft_plan_f32_t *plan)
     }
     return 1;
 }
+
+#define DEFINE_BATCH_MAJOR_F32_VARIANT(SFX, VTYPE, VLOAD, VSTORE, VMUL, \
+                                        VNMSAC, VMACC, VADD, VSUB, VSETVL) \
+static int fft_butterflies_batch_major_##SFX(const fft_plan_f32_t *plan)    \
+{                                                                          \
+    /* BATCH-MAJOR: process one FFT and vectorize consecutive bin offsets. */ \
+    for (size_t batch = 0; batch < plan->batch_count; ++batch) {           \
+        size_t base = batch * plan->size;                                   \
+        float *real = &plan->data_real[base];                               \
+        float *imag = &plan->data_imag[base];                               \
+        for (size_t bs = 2; bs <= plan->size; bs <<= 1) {                  \
+            size_t half = bs >> 1, stage_base = half - 1;                  \
+            for (size_t block = 0; block < plan->size; block += bs) {      \
+                float er = real[block], ei = imag[block];                   \
+                float or_ = real[block + half], oi = imag[block + half];   \
+                real[block] = er + or_; real[block + half] = er - or_;     \
+                imag[block] = ei + oi; imag[block + half] = ei - oi;       \
+                for (size_t off = 1; off < half;) {                         \
+                    size_t vl = VSETVL(half - off);                         \
+                    if (vl == 0 || vl > half - off) return 0;               \
+                    VTYPE xr = VLOAD(&real[block + half + off], vl);        \
+                    VTYPE xi = VLOAD(&imag[block + half + off], vl);        \
+                    VTYPE wr = VLOAD(&plan->twiddle_real[stage_base + off], vl); \
+                    VTYPE wi = VLOAD(&plan->twiddle_imag[stage_base + off], vl); \
+                    VTYPE pr = VMUL(xr, wr, vl);                            \
+                    VTYPE pi = VMUL(xi, wr, vl);                            \
+                    pr = VNMSAC(pr, wi, xi, vl);                            \
+                    pi = VMACC(pi, wi, xr, vl);                             \
+                    VTYPE ar = VLOAD(&real[block + off], vl);               \
+                    VTYPE ai = VLOAD(&imag[block + off], vl);               \
+                    VTYPE ur = VADD(ar, pr, vl), lr = VSUB(ar, pr, vl);     \
+                    VTYPE ui = VADD(ai, pi, vl), li = VSUB(ai, pi, vl);     \
+                    VSTORE(&real[block + off], ur, vl);                     \
+                    VSTORE(&real[block + half + off], lr, vl);              \
+                    VSTORE(&imag[block + off], ui, vl);                     \
+                    VSTORE(&imag[block + half + off], li, vl);              \
+                    off += vl;                                              \
+                }                                                           \
+            }                                                               \
+        }                                                                   \
+    }                                                                       \
+    return 1;                                                               \
+}
+
+DEFINE_BATCH_MAJOR_F32_VARIANT(m2, vfloat32m2_t,
+    __riscv_vle32_v_f32m2, __riscv_vse32_v_f32m2,
+    __riscv_vfmul_vv_f32m2, __riscv_vfnmsac_vv_f32m2,
+    __riscv_vfmacc_vv_f32m2, __riscv_vfadd_vv_f32m2,
+    __riscv_vfsub_vv_f32m2, __riscv_vsetvl_e32m2)
+DEFINE_BATCH_MAJOR_F32_VARIANT(m4, vfloat32m4_t,
+    __riscv_vle32_v_f32m4, __riscv_vse32_v_f32m4,
+    __riscv_vfmul_vv_f32m4, __riscv_vfnmsac_vv_f32m4,
+    __riscv_vfmacc_vv_f32m4, __riscv_vfadd_vv_f32m4,
+    __riscv_vfsub_vv_f32m4, __riscv_vsetvl_e32m4)
+DEFINE_BATCH_MAJOR_F32_VARIANT(m8, vfloat32m8_t,
+    __riscv_vle32_v_f32m8, __riscv_vse32_v_f32m8,
+    __riscv_vfmul_vv_f32m8, __riscv_vfnmsac_vv_f32m8,
+    __riscv_vfmacc_vv_f32m8, __riscv_vfadd_vv_f32m8,
+    __riscv_vfsub_vv_f32m8, __riscv_vsetvl_e32m8)
 
 #define DEFINE_SIMPLE_LMUL_VARIANT(SFX, VTYPE, VLOAD, VSTORE, VMUL, VNMSAC, \
                                    VMACC, VADD, VSUB, VSETVL)              \
@@ -652,6 +764,27 @@ static size_t count_mismatches_f32(const fft_plan_f32_t *plan)
     return count;
 }
 
+static size_t count_mismatches_batch_major_f32(const fft_plan_f32_t *plan)
+{
+    size_t count = 0;
+    for (size_t batch = 0; batch < plan->batch_count; ++batch) {
+        size_t base = batch * plan->size;
+        for (size_t bin = 0; bin < plan->size; ++bin) {
+            size_t pos = base + bin;
+            float re = fabsf(plan->data_real[pos] - groundtruth_real[bin]);
+            float ie = fabsf(plan->data_imag[pos] - groundtruth_imag[bin]);
+            float rr = re /
+                (FFT_ATOL + FFT_RTOL * fabsf(groundtruth_real[bin]));
+            float ir = ie /
+                (FFT_ATOL + FFT_RTOL * fabsf(groundtruth_imag[bin]));
+            if (!isfinite(plan->data_real[pos]) ||
+                !isfinite(plan->data_imag[pos]) || rr > 1.0f || ir > 1.0f)
+                ++count;
+        }
+    }
+    return count;
+}
+
 typedef int (*fft_butterfly_fn_f32)(const fft_plan_f32_t *);
 
 static int run_timing_variant_f32(fft_plan_f32_t *plan,
@@ -678,7 +811,7 @@ static int run_timing_variant_f32(fft_plan_f32_t *plan,
     reverse_cycles /= FFT_BENCHMARK_RUNS;
     butterfly_cycles /= FFT_BENCHMARK_RUNS;
     size_t mismatches = count_mismatches_f32(plan);
-    printf("\nRVV variant: %s\n", name);
+    printf("\nRVV FP32 bin-major variant: %s\n", name);
     printf("benchmark runs: %u\n", FFT_BENCHMARK_RUNS);
     printf("average input layout cycles: "); print_u64_decimal(layout_cycles);
     printf("\naverage bit reversal cycles: "); print_u64_decimal(reverse_cycles);
@@ -691,8 +824,51 @@ static int run_timing_variant_f32(fft_plan_f32_t *plan,
     print_u64_decimal((reverse_cycles + butterfly_cycles) / plan->batch_count);
     printf("\nmismatched complex points: %u / %u\n", (unsigned)mismatches,
         (unsigned)(plan->size * plan->batch_count));
-    printf("FFT RVV %s: %s\n", name,
+    printf("FFT FP32 RVV bin-major %s: %s\n", name,
         layout_ok && reverse_ok && butterfly_ok && mismatches == 0 ? "PASS" : "FAIL");
+    return layout_ok && reverse_ok && butterfly_ok && mismatches == 0;
+}
+
+static int run_batch_major_variant_f32(fft_plan_f32_t *plan,
+                                       const char *name,
+                                       fft_butterfly_fn_f32 function)
+{
+    uint64_t layout_cycles = 0;
+    uint64_t reverse_cycles = 0;
+    uint64_t butterfly_cycles = 0;
+    int layout_ok = 1, reverse_ok = 1, butterfly_ok = 1;
+    for (unsigned run = 0; run < FFT_BENCHMARK_RUNS; ++run) {
+        uint64_t layout_start = nn_runtime_read_cycles();
+        layout_ok &= fft_plan_load_input_batch_major_f32(plan);
+        uint64_t layout_end = nn_runtime_read_cycles();
+        reverse_ok &= fft_bit_reverse_batch_major_f32(plan);
+        uint64_t reverse_end = nn_runtime_read_cycles();
+        butterfly_ok &= function(plan);
+        uint64_t fft_end = nn_runtime_read_cycles();
+        layout_cycles += layout_end - layout_start;
+        reverse_cycles += reverse_end - layout_end;
+        butterfly_cycles += fft_end - reverse_end;
+    }
+    layout_cycles /= FFT_BENCHMARK_RUNS;
+    reverse_cycles /= FFT_BENCHMARK_RUNS;
+    butterfly_cycles /= FFT_BENCHMARK_RUNS;
+    size_t mismatches = count_mismatches_batch_major_f32(plan);
+    printf("\nRVV FP32 batch-major variant: %s\n", name);
+    printf("benchmark runs: %u\n", FFT_BENCHMARK_RUNS);
+    printf("average input layout cycles: "); print_u64_decimal(layout_cycles);
+    printf("\naverage bit reversal cycles: "); print_u64_decimal(reverse_cycles);
+    printf("\naverage butterfly cycles: "); print_u64_decimal(butterfly_cycles);
+    printf("\naverage FFT cycles: ");
+    print_u64_decimal(reverse_cycles + butterfly_cycles);
+    printf("\naverage butterfly cycles per FFT: ");
+    print_u64_decimal(butterfly_cycles / plan->batch_count);
+    printf("\naverage FFT cycles per FFT: ");
+    print_u64_decimal((reverse_cycles + butterfly_cycles) / plan->batch_count);
+    printf("\nmismatched complex points: %u / %u\n", (unsigned)mismatches,
+        (unsigned)(plan->size * plan->batch_count));
+    printf("FFT FP32 RVV batch-major %s: %s\n", name,
+        layout_ok && reverse_ok && butterfly_ok && mismatches == 0 ?
+            "PASS" : "FAIL");
     return layout_ok && reverse_ok && butterfly_ok && mismatches == 0;
 }
 
@@ -726,15 +902,17 @@ int fft_batched_testbench_run(void)
     int plan_ok = fft_plan_init_f32(&plan, FFT_SIZE, FFT_BATCH_COUNT);
     uint64_t plan_end = nn_runtime_read_cycles();
     if (!plan_ok) {
-        printf("FFT batched RVV: FAIL (invalid FFT plan)\n");
+        printf("FFT batched FP32 RVV: FAIL (invalid FFT plan)\n");
         return 1;
     }
-    printf("FFT size: %u\nstages: %u\nbatches: %u\n",
+    printf("precision: FP32\nFFT size: %u\nstages: %u\nbatches: %u\n",
         (unsigned)plan.size, plan.stage_count, (unsigned)plan.batch_count);
     printf("twiddle plan cycles: ");
     print_u64_decimal(plan_end - plan_start);
     printf("\n");
 
+    printf("\n===== FP32 BIN-MAJOR [bin][batch] =====\n");
+    printf("RVV lanes span batches; twiddle is scalar-broadcast.\n");
     int m2_variant_ok = run_timing_variant_f32(
         &plan, "m2", fft_butterflies_m2);
     int m2_fused_variant_ok = run_timing_variant_f32(
@@ -742,7 +920,8 @@ int fft_batched_testbench_run(void)
     int m4_fused_variant_ok = run_timing_variant_f32(
         &plan, "m4-stage-fused", fft_butterflies_m4_stage_fused);
 
-    printf("\nRVV variant: m4\nbenchmark runs: %u\n", FFT_BENCHMARK_RUNS);
+    printf("\nRVV FP32 bin-major variant: m4\nbenchmark runs: %u\n",
+        FFT_BENCHMARK_RUNS);
     uint64_t layout_cycles = 0, bit_reverse_cycles = 0, butterfly_cycles = 0;
     int layout_vector_length_ok = 1, bit_reverse_ok = 1, vector_length_ok = 1;
     for (unsigned run = 0; run < FFT_BENCHMARK_RUNS; ++run) {
@@ -856,19 +1035,31 @@ int fft_batched_testbench_run(void)
     int m8_fused_variant_ok = run_timing_variant_f32(
         &plan, "m8-stage-fused", fft_butterflies_m8_stage_fused);
 
+    printf("\n===== FP32 BATCH-MAJOR [batch][bin] =====\n");
+    printf("RVV lanes span bins within one FFT; twiddles are vectors.\n");
+    int batch_major_m2_ok = run_batch_major_variant_f32(
+        &plan, "m2", fft_butterflies_batch_major_m2);
+    int batch_major_m4_ok = run_batch_major_variant_f32(
+        &plan, "m4", fft_butterflies_batch_major_m4);
+    int batch_major_m8_ok = run_batch_major_variant_f32(
+        &plan, "m8", fft_butterflies_batch_major_m8);
+
     if (!layout_vector_length_ok || !bit_reverse_ok || !vector_length_ok) {
-        printf("FFT batched RVV: FAIL (invalid VL returned by vsetvl)\n");
+        printf("FFT batched FP32 RVV: FAIL (invalid VL returned by vsetvl)\n");
         fft_plan_destroy_f32(&plan);
         return 1;
     }
     if (!m2_variant_ok || !m2_fused_variant_ok || !m4_fused_variant_ok ||
-        !m8_variant_ok || !m8_fused_variant_ok || non_finite_count > 0 ||
-        max_ratio > 1.0f) {
-        printf("FFT batched RVV: FAIL (atol %.6f, rtol %.6f)\n", FFT_ATOL, FFT_RTOL);
+        !m8_variant_ok || !m8_fused_variant_ok || !batch_major_m2_ok ||
+        !batch_major_m4_ok || !batch_major_m8_ok ||
+        non_finite_count > 0 || max_ratio > 1.0f) {
+        printf("FFT batched FP32 RVV: FAIL (atol %.6f, rtol %.6f)\n",
+            FFT_ATOL, FFT_RTOL);
         fft_plan_destroy_f32(&plan);
         return 1;
     }
-    printf("FFT batched RVV: PASS (atol %.6f, rtol %.6f)\n", FFT_ATOL, FFT_RTOL);
+    printf("FFT batched FP32 RVV: PASS (atol %.6f, rtol %.6f)\n",
+        FFT_ATOL, FFT_RTOL);
     fft_plan_destroy_f32(&plan);
     return 0;
 }

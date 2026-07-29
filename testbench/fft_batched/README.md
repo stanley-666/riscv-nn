@@ -130,8 +130,9 @@ Bit-reversal swaps use the FPGA-compatible `e32,m1` sequence. Separate
 butterfly functions generate real `e32,m2`, `e32,m4`, and `e32,m8`
 instructions; LMUL selection is performed outside every timed hot loop.
 
-The twiddle plan is constructed exactly once and shared by all six variants.
-Each variant performs 10 complete runs. A run reloads the original
+The twiddle plan is constructed exactly once and shared by all six bin-major
+variants and all three batch-major variants. Each variant performs 10 complete
+runs. A run reloads the original
 input, applies bit reversal, and executes every butterfly stage. Reported
 layout, bit-reversal, butterfly, and FFT cycle counts are integer averages of
 those 10 runs; validation inspects the final run and is outside the timed
@@ -245,6 +246,31 @@ with zero mismatched complex points for every variant.
 | `e32,m8` | 336,913 | 221,945 | 357,357 | 579,302 | 9,051 | 0 / 65,536 |
 | `e32,m8-stage-fused` | 336,913 | 221,945 | 439,843 | 661,788 | 10,340 | 0 / 65,536 |
 
+### FP32 bin-major versus batch-major Spike result
+
+The same binary also measures an explicit `[batch][bin]` layout. In the
+original `[bin][batch]` kernels, vector lanes span independent batches and
+each butterfly uses a shared scalar twiddle. In the batch-major kernels,
+vector lanes span consecutive FFT bins and the corresponding twiddles are
+loaded as vectors. All rows below process 64 independent 1,024-point FFTs,
+average 10 runs, and pass all 65,536 complex-point comparisons.
+
+| Layout | Variant | Input layout | Bit reversal | Butterfly | FFT | Mismatches |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Bin-major | `m2` | 360,760 | 221,945 | 1,192,965 | 1,414,910 | 0 / 65,536 |
+| Bin-major | `m4` | 336,928 | 230,881 | 662,271 | 893,152 | 0 / 65,536 |
+| Bin-major | `m8` | 336,913 | 221,945 | 357,357 | 579,302 | 0 / 65,536 |
+| Batch-major | `m2` | 590,235 | 4,968,994 | 4,216,406 | 9,185,400 | 0 / 65,536 |
+| Batch-major | `m4` | 590,235 | 4,969,061 | 2,940,206 | 7,909,267 | 0 / 65,536 |
+| Batch-major | `m8` | 590,235 | 4,968,996 | 4,504,727 | 9,473,723 | 0 / 65,536 |
+
+Batch-major `m4` is its fastest LMUL, but its butterfly region is `8.23x`
+slower than bin-major `m8`, and its complete FFT region is `13.65x` slower.
+The batch-major layout must perform a separate bit-reversal permutation for
+each FFT, while bin-major swaps two contiguous 64-element batch rows. It also
+loads a vector of twiddles instead of broadcasting one twiddle across all
+batches. These results therefore favor bin-major for this 64-batch workload.
+
 For the butterfly-only region, stage fusion makes m2 `1.47x` faster and m4
 `1.32x` faster than their unchanged baselines. Fused m8 is `1.23x` slower than
 baseline m8. Disassembly explains the difference: m2 has no whole-register
@@ -263,20 +289,21 @@ all per-variant FFT averages.
 ### Genesys2 nine-configuration campaign
 
 All hardware rows use a 50 MHz CPU clock, a 1,024-point FP32 FFT, 64 batches,
-one shared twiddle plan, and 10-run averages. A configuration is complete only
-after all six variants report `0 / 65,536` mismatches and PASS.
+one shared twiddle plan, and 10-run averages. A current layout-comparison
+configuration is complete only after all nine variants report
+`0 / 65,536` mismatches and PASS.
 
-| Hardware config | VLEN | Datapath | Complete six-variant result |
+| Hardware config | VLEN | Datapath | Complete measured result |
 | --- | ---: | ---: | --- |
-| `GENV128D64` | 128 | 64 | PASS, 0 / 65,536 for all variants |
-| `GENV128D128` | 128 | 128 | PASS, 0 / 65,536 for all variants |
-| `GENV256D64` | 256 | 64 | PASS, 0 / 65,536 for all variants |
-| `GENV256D128` | 256 | 128 | PASS, 0 / 65,536 for all variants |
-| `GENV512D64` | 512 | 64 | PASS, 0 / 65,536 for all variants |
-| `GENV512D128` | 512 | 128 | PASS, 0 / 65,536 for all variants |
-| `LGVV128D128` | 128 | 128 | PASS, 0 / 65,536 for all variants |
-| `LGVV256D128` | 256 | 128 | PASS, 0 / 65,536 for all variants |
-| `LGVV512D128` | 512 | 128 | PASS, 0 / 65,536 for all variants |
+| `GENV128D64` | 128 | 64 | PASS, 0 / 65,536 for all 9 layout/LMUL variants |
+| `GENV128D128` | 128 | 128 | PASS, 0 / 65,536 for all 9 layout/LMUL variants |
+| `GENV256D64` | 256 | 64 | PASS, 0 / 65,536 for all 9 layout/LMUL variants |
+| `GENV256D128` | 256 | 128 | PASS, 0 / 65,536 for all 9 layout/LMUL variants |
+| `GENV512D64` | 512 | 64 | PASS, 0 / 65,536 for all 9 layout/LMUL variants |
+| `GENV512D128` | 512 | 128 | PASS, 0 / 65,536 for all 9 layout/LMUL variants |
+| `LGVV128D128` | 128 | 128 | PASS, 0 / 65,536 for all 9 layout/LMUL variants |
+| `LGVV256D128` | 256 | 128 | PASS, 0 / 65,536 for all 9 layout/LMUL variants |
+| `LGVV512D128` | 512 | 128 | PASS, 0 / 65,536 for all 9 layout/LMUL variants |
 
 #### Main FFT kernel speed table
 
@@ -286,15 +313,15 @@ reversal, validation, and one-time twiddle-plan creation. Lower is better.
 
 | Hardware config | m2 | m2 fused | m4 | m4 fused | m8 | m8 fused | Best kernel |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| `GENV128D64` | 2,243,617 | 1,905,897 | 1,752,640 | **1,619,368** | 1,656,448 | 2,464,014 | m4 fused |
-| `GENV128D128` | 1,881,264 | 1,358,989 | 1,175,968 | 1,012,973 | **893,472** | 1,573,776 | m8 |
-| `GENV256D64` | 1,764,814 | 1,611,174 | **1,538,435** | 1,538,590 | 1,675,279 | 2,243,737 | m4 |
-| `GENV256D128` | 1,277,344 | 986,395 | 901,643 | 850,794 | **831,941** | 1,246,067 | m8 |
-| `GENV512D64` | 1,669,023 | 1,542,146 | 1,679,955 | **1,479,809** | 1,675,761 | 10,690,936 | m4 fused |
-| `GENV512D128` | 908,958 | 846,725 | 827,396 | **773,249** | 831,771 | 9,410,351 | m4 fused |
-| `LGVV128D128` | 1,769,793 | 1,357,547 | 1,117,048 | 1,006,731 | **853,167** | 1,543,727 | m8 |
-| `LGVV256D128` | 1,156,745 | 984,563 | 850,795 | 848,839 | **847,153** | 1,214,008 | m8 |
-| `LGVV512D128` | 862,190 | 844,371 | 847,393 | **772,922** | 847,515 | 9,403,442 | m4 fused |
+| `GENV128D64` | 2,241,998 | 1,904,823 | 1,856,716 | **1,618,475** | 1,660,562 | 2,466,670 | m4 fused |
+| `GENV128D128` | 1,880,734 | 1,358,932 | 1,337,759 | 1,013,401 | **896,622** | 1,574,612 | m8 |
+| `GENV256D64` | 1,765,029 | 1,610,780 | 1,585,568 | **1,537,331** | 1,679,471 | 2,245,775 | m4 fused |
+| `GENV256D128` | 1,276,149 | 987,527 | 1,018,141 | 850,743 | **835,454** | 1,247,631 | m8 |
+| `GENV512D64` | 1,673,672 | 1,540,598 | 1,681,172 | **1,479,617** | 1,678,834 | 6,719,823 | m4 fused |
+| `GENV512D128` | 911,399 | 845,312 | 829,309 | **773,508** | 835,376 | 5,265,212 | m4 fused |
+| `LGVV128D128` | 1,767,700 | 1,358,129 | 1,279,325 | 1,007,728 | **852,932** | 1,545,075 | m8 |
+| `LGVV256D128` | 1,157,176 | 985,849 | 970,153 | **847,929** | 853,838 | 1,214,280 | m4 fused |
+| `LGVV512D128` | 861,070 | 842,949 | 828,128 | **773,128** | 854,032 | 5,316,059 | m4 fused |
 
 The scalar CPU remains a separate reference row and is not expanded into
 `m2/m4/m8` or RVV stage-fusion variants, because it has no LMUL register-group
@@ -307,196 +334,385 @@ comparison table is published.
 #### Complete GENV128D64 timing data
 
 This Genesys2 FPGA measurement uses a 50 MHz clock, VLEN=128, D=64, cold boot,
-one shared twiddle plan, and 10 runs per variant. Twiddle plan creation took
-173,496 cycles. All six variants passed validation.
+one shared twiddle plan, and 10 runs per variant. It uses the current
+layout-comparison binary. The supplied UART excerpt starts at the bin-major
+heading, so it does not contain the twiddle-plan cycle line. All nine variants
+passed validation with zero mismatches.
+
+##### Bin-major `[bin][batch]`
+
+RVV lanes span the 64 independent batches and use a scalar-broadcast twiddle.
 
 | Variant | Input layout | Bit reversal | Butterfly | FFT | Butterfly cycles/FFT | FFT cycles/FFT | Mismatches |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `e32,m2` | 463,060 | 321,708 | 2,243,617 | 2,565,325 | 35,056 | 40,083 | 0 / 65,536 |
-| `e32,m2-stage-fused` | 455,082 | 315,384 | 1,905,897 | 2,221,281 | 29,779 | 34,707 | 0 / 65,536 |
-| `e32,m4` | 443,749 | 315,493 | 1,752,640 | 2,068,133 | 27,385 | 32,314 | 0 / 65,536 |
-| `e32,m4-stage-fused` | 454,983 | 315,380 | 1,619,368 | 1,934,748 | 25,302 | 30,230 | 0 / 65,536 |
-| `e32,m8` | 454,871 | 314,210 | 1,656,448 | 1,970,658 | 25,882 | 30,791 | 0 / 65,536 |
-| `e32,m8-stage-fused` | 455,141 | 315,896 | 2,464,014 | 2,779,910 | 38,500 | 43,436 | 0 / 65,536 |
+| `e32,m2` | 462,937 | 321,659 | 2,241,998 | 2,563,657 | 35,031 | 40,057 | 0 / 65,536 |
+| `e32,m2-stage-fused` | 455,037 | 315,007 | 1,904,823 | 2,219,830 | 29,762 | 34,684 | 0 / 65,536 |
+| `e32,m4` | 453,574 | 334,994 | 1,856,716 | 2,191,710 | 29,011 | 34,245 | 0 / 65,536 |
+| `e32,m4-stage-fused` | 455,064 | 315,324 | **1,618,475** | **1,933,799** | **25,288** | **30,215** | 0 / 65,536 |
+| `e32,m8` | 454,969 | **314,187** | 1,660,562 | 1,974,749 | 25,946 | 30,855 | 0 / 65,536 |
+| `e32,m8-stage-fused` | 454,940 | 315,604 | 2,466,670 | 2,782,274 | 38,541 | 43,473 | 0 / 65,536 |
 
-On GENV128D64, stage fusion improves m2 by `1.18x` and m4 by `1.08x`, but
-makes m8 `1.49x` slower. Fused m4 is the best kernel and is `1.02x` faster
-than baseline m8. Comparing the best kernels at the same VLEN, GENV128D64
-requires `1.81x` as many butterfly cycles as GENV128D128.
+Stage fusion improves m2 by `1.18x` and m4 by `1.15x`, while fused m8 is
+`1.49x` slower than baseline m8. Fused m4 is the fastest bin-major kernel.
+
+##### Batch-major `[batch][bin]`
+
+RVV lanes span consecutive bins within one FFT and load vector twiddles.
+
+| Variant | Input layout | Bit reversal | Butterfly | FFT | Butterfly cycles/FFT | FFT cycles/FFT | Mismatches |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `e32,m2` | 758,174 | **3,979,053** | 8,858,914 | **12,837,967** | 138,420 | **200,593** | 0 / 65,536 |
+| `e32,m4` | 761,704 | 4,506,700 | **8,488,551** | 12,995,251 | **132,633** | 203,050 | 0 / 65,536 |
+| `e32,m8` | **757,542** | 3,997,235 | 13,728,894 | 17,726,129 | 214,513 | 276,970 | 0 / 65,536 |
+
+Batch-major m2 is its best complete FFT, while m4 has its best butterfly
+region. Comparing the best complete kernels, batch-major is `6.64x` slower
+than bin-major. Its best butterfly region is `5.24x` slower. At the same
+non-fused LMUL, batch-major is `5.01x` slower for m2, `5.93x` slower for m4,
+and `8.98x` slower for m8 in complete FFT cycles.
+
+At the same VLEN=128, GENV128D64 requires `1.81x` as many best-kernel
+butterfly cycles and `1.65x` as many complete FFT cycles as GENV128D128.
 
 #### Complete GENV128D128 timing data
 
 This Genesys2 FPGA measurement uses a 50 MHz clock, VLEN=128, D=128, cold boot,
-one shared twiddle plan, and 10 runs per variant. Twiddle plan creation took
-173,634 cycles. All six variants passed validation.
+one shared twiddle plan, and 10 runs per variant. It uses the current
+layout-comparison binary. The supplied UART excerpt starts at the bin-major
+heading, so it does not contain the twiddle-plan cycle line. All nine variants
+passed validation with zero mismatches.
+
+##### Bin-major `[bin][batch]`
+
+RVV lanes span the 64 independent batches and use a scalar-broadcast twiddle.
 
 | Variant | Input layout | Bit reversal | Butterfly | FFT | Butterfly cycles/FFT | FFT cycles/FFT | Mismatches |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `e32,m2` | 464,341 | 280,467 | 1,881,264 | 2,161,731 | 29,394 | 33,777 | 0 / 65,536 |
-| `e32,m2-stage-fused` | 454,672 | 273,669 | 1,358,989 | 1,632,658 | 21,234 | 25,510 | 0 / 65,536 |
-| `e32,m4` | 444,492 | 274,132 | 1,175,968 | 1,450,100 | 18,374 | 22,657 | 0 / 65,536 |
-| `e32,m4-stage-fused` | 454,775 | 273,529 | 1,012,973 | 1,286,502 | 15,827 | 20,101 | 0 / 65,536 |
-| `e32,m8` | 454,785 | 272,334 | 893,472 | 1,165,806 | 13,960 | 18,215 | 0 / 65,536 |
-| `e32,m8-stage-fused` | 454,850 | 274,026 | 1,573,776 | 1,847,802 | 24,590 | 28,871 | 0 / 65,536 |
+| `e32,m2` | 464,294 | 281,001 | 1,880,734 | 2,161,735 | 29,386 | 33,777 | 0 / 65,536 |
+| `e32,m2-stage-fused` | 454,841 | 273,428 | 1,358,932 | 1,632,360 | 21,233 | 25,505 | 0 / 65,536 |
+| `e32,m4` | 453,908 | 294,142 | 1,337,759 | 1,631,901 | 20,902 | 25,498 | 0 / 65,536 |
+| `e32,m4-stage-fused` | 454,690 | 273,324 | 1,013,401 | 1,286,725 | 15,834 | 20,105 | 0 / 65,536 |
+| `e32,m8` | 454,924 | **272,596** | **896,622** | **1,169,218** | **14,009** | **18,269** | 0 / 65,536 |
+| `e32,m8-stage-fused` | 454,695 | 273,975 | 1,574,612 | 1,848,587 | 24,603 | 28,884 | 0 / 65,536 |
 
-On GENV128D128, stage fusion improves m2 by `1.38x` and m4 by `1.16x`, but
-makes m8 `1.76x` slower. Baseline m8 is the best kernel and is `1.13x` faster
-than fused m4. Its best-kernel butterfly count is about 5% higher than
-LGVV128D128's baseline m8 result.
+Stage fusion improves m2 by `1.38x` and m4 by `1.32x`, but makes m8 `1.76x`
+slower. Baseline m8 remains the fastest bin-major kernel. Its complete FFT is
+approximately `1.04x` slower than LGVV128D128's baseline m8 result.
+
+##### Batch-major `[batch][bin]`
+
+RVV lanes span consecutive bins within one FFT and load vector twiddles.
+
+| Variant | Input layout | Bit reversal | Butterfly | FFT | Butterfly cycles/FFT | FFT cycles/FFT | Mismatches |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `e32,m2` | 761,981 | **3,995,877** | 8,423,113 | 12,418,990 | 131,611 | 194,046 | 0 / 65,536 |
+| `e32,m4` | 765,565 | 4,523,745 | **7,844,723** | **12,368,468** | **122,573** | **193,257** | 0 / 65,536 |
+| `e32,m8` | **759,799** | 4,014,883 | 10,997,182 | 15,012,065 | 171,830 | 234,563 | 0 / 65,536 |
+
+Batch-major m4 is its fastest butterfly and complete FFT kernel. Comparing the
+best complete kernels, batch-major is `10.58x` slower than bin-major. Its best
+butterfly region is `8.75x` slower. At the same non-fused LMUL, batch-major is
+`5.74x` slower for m2, `7.58x` slower for m4, and `12.84x` slower for m8 in
+complete FFT cycles.
 
 #### Complete GENV256D64 timing data
 
 This Genesys2 FPGA measurement uses a 50 MHz clock, VLEN=256, D=64, cold boot,
-one shared twiddle plan, and 10 runs per variant. Twiddle plan creation took
-173,217 cycles. All six variants passed validation.
+one shared twiddle plan, and 10 runs per variant. It uses the current
+layout-comparison binary. Twiddle plan creation took 191,888 cycles. All nine
+variants passed validation with zero mismatches.
+
+##### Bin-major `[bin][batch]`
+
+RVV lanes span the 64 independent batches and use a scalar-broadcast twiddle.
 
 | Variant | Input layout | Bit reversal | Butterfly | FFT | Butterfly cycles/FFT | FFT cycles/FFT | Mismatches |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `e32,m2` | 463,034 | 243,167 | 1,764,814 | 2,007,981 | 27,575 | 31,374 | 0 / 65,536 |
-| `e32,m2-stage-fused` | 455,122 | 236,998 | 1,611,174 | 1,848,172 | 25,174 | 28,877 | 0 / 65,536 |
-| `e32,m4` | 443,770 | 236,879 | 1,538,435 | 1,775,314 | 24,038 | 27,739 | 0 / 65,536 |
-| `e32,m4-stage-fused` | 454,880 | 237,044 | 1,538,590 | 1,775,634 | 24,040 | 27,744 | 0 / 65,536 |
-| `e32,m8` | 454,828 | 235,407 | 1,675,279 | 1,910,686 | 26,176 | 29,854 | 0 / 65,536 |
-| `e32,m8-stage-fused` | 455,383 | 238,278 | 2,243,737 | 2,482,015 | 35,058 | 38,781 | 0 / 65,536 |
+| `e32,m2` | 463,119 | 243,168 | 1,765,029 | 2,008,197 | 27,578 | 31,378 | 0 / 65,536 |
+| `e32,m2-stage-fused` | 455,083 | 237,093 | 1,610,780 | 1,847,873 | 25,168 | 28,873 | 0 / 65,536 |
+| `e32,m4` | 453,859 | 256,462 | 1,585,568 | 1,842,030 | 24,774 | 28,781 | 0 / 65,536 |
+| `e32,m4-stage-fused` | 455,299 | 236,899 | **1,537,331** | **1,774,230** | **24,020** | **27,722** | 0 / 65,536 |
+| `e32,m8` | 454,913 | **235,397** | 1,679,471 | 1,914,868 | 26,241 | 29,919 | 0 / 65,536 |
+| `e32,m8-stage-fused` | 455,315 | 237,736 | 2,245,775 | 2,483,511 | 35,090 | 38,804 | 0 / 65,536 |
 
-On GENV256D64, stage fusion improves m2 by `1.10x`, while m4 fusion is
-effectively neutral and is 155 cycles slower than its baseline. Baseline m4 is
-the best kernel. Fused m8 is `1.34x` slower than baseline m8. Comparing the
-best kernels at the same VLEN, GENV256D64 requires `1.85x` as many butterfly
-cycles as GENV256D128, showing the throughput cost of the narrower datapath.
+Stage fusion improves m2 by `1.10x` and m4 by `1.03x`, while fused m8 is
+`1.34x` slower than baseline m8. Fused m4 is the fastest bin-major kernel.
+
+##### Batch-major `[batch][bin]`
+
+RVV lanes span consecutive bins within one FFT and load vector twiddles.
+
+| Variant | Input layout | Bit reversal | Butterfly | FFT | Butterfly cycles/FFT | FFT cycles/FFT | Mismatches |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `e32,m2` | **757,574** | **3,979,025** | 8,259,873 | **12,238,898** | 129,060 | **191,232** | 0 / 65,536 |
+| `e32,m4` | 762,288 | 4,506,614 | **8,240,695** | 12,747,309 | **128,760** | 199,176 | 0 / 65,536 |
+| `e32,m8` | 757,844 | 3,998,686 | 17,937,654 | 21,936,340 | 280,275 | 342,755 | 0 / 65,536 |
+
+Batch-major m2 is its best complete FFT, while m4 has its best butterfly
+region. Comparing the best complete kernels, batch-major is `6.90x` slower
+than bin-major. Its best butterfly region is `5.36x` slower. At the same
+non-fused LMUL, batch-major is `6.09x` slower for m2, `6.92x` slower for m4,
+and `11.46x` slower for m8 in complete FFT cycles.
+
+At the same VLEN=256, GENV256D64 requires `1.84x` as many best-kernel
+butterfly cycles and `1.72x` as many complete FFT cycles as GENV256D128,
+showing the throughput cost of the narrower datapath.
 
 #### Complete GENV256D128 timing data
 
 This Genesys2 FPGA measurement uses a 50 MHz clock, VLEN=256, D=128, cold boot,
-one shared twiddle plan, and 10 runs per variant. Twiddle plan creation took
-173,394 cycles. All six variants passed validation.
+one shared twiddle plan, and 10 runs per variant. It uses the current
+layout-comparison binary. Twiddle plan creation took 191,961 cycles. All nine
+variants passed validation with zero mismatches.
+
+##### Bin-major `[bin][batch]`
+
+RVV lanes span the 64 independent batches and use a scalar-broadcast twiddle.
 
 | Variant | Input layout | Bit reversal | Butterfly | FFT | Butterfly cycles/FFT | FFT cycles/FFT | Mismatches |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `e32,m2` | 464,104 | 205,477 | 1,277,344 | 1,482,821 | 19,958 | 23,169 | 0 / 65,536 |
-| `e32,m2-stage-fused` | 454,624 | 199,354 | 986,395 | 1,185,749 | 15,412 | 18,527 | 0 / 65,536 |
-| `e32,m4` | 444,347 | 199,545 | 901,643 | 1,101,188 | 14,088 | 17,206 | 0 / 65,536 |
-| `e32,m4-stage-fused` | 454,913 | 199,069 | 850,794 | 1,049,863 | 13,293 | 16,404 | 0 / 65,536 |
-| `e32,m8` | 454,801 | 198,292 | 831,941 | 1,030,233 | 12,999 | 16,097 | 0 / 65,536 |
-| `e32,m8-stage-fused` | 455,130 | 200,371 | 1,246,067 | 1,446,438 | 19,469 | 22,600 | 0 / 65,536 |
+| `e32,m2` | 464,389 | 205,694 | 1,276,149 | 1,481,843 | 19,939 | 23,153 | 0 / 65,536 |
+| `e32,m2-stage-fused` | 454,669 | 199,234 | 987,527 | 1,186,761 | 15,430 | 18,543 | 0 / 65,536 |
+| `e32,m4` | 453,861 | 219,170 | 1,018,141 | 1,237,311 | 15,908 | 19,332 | 0 / 65,536 |
+| `e32,m4-stage-fused` | 454,651 | 199,609 | 850,743 | 1,050,352 | 13,292 | 16,411 | 0 / 65,536 |
+| `e32,m8` | 454,662 | **198,117** | **835,454** | **1,033,571** | **13,053** | **16,149** | 0 / 65,536 |
+| `e32,m8-stage-fused` | 454,985 | 200,483 | 1,247,631 | 1,448,114 | 19,494 | 22,626 | 0 / 65,536 |
 
-On GENV256D128, stage fusion improves m2 by `1.29x` and m4 by `1.06x`, but
-makes m8 `1.50x` slower. Baseline m8 is the best kernel and is `1.02x` faster
-than fused m4. As on LGVV256D128, the VLEN=256/D=128 configuration places
-baseline m8 and fused m4 very close together, while the fused m8 register
-pressure outweighs the eliminated stage-boundary traffic.
+Stage fusion improves m2 by `1.29x` and m4 by `1.20x`, but makes m8 `1.49x`
+slower. Baseline m8 is the fastest bin-major kernel and is `1.02x` faster than
+fused m4. This remains consistent with LGVV256D128, whose fused-m4 result is
+within approximately 1.3% of this best complete FFT.
+
+##### Batch-major `[batch][bin]`
+
+RVV lanes span consecutive bins within one FFT and load vector twiddles.
+
+| Variant | Input layout | Bit reversal | Butterfly | FFT | Butterfly cycles/FFT | FFT cycles/FFT | Mismatches |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `e32,m2` | 761,198 | **3,995,629** | 7,690,714 | **11,686,343** | 120,167 | **182,599** | 0 / 65,536 |
+| `e32,m4` | 764,948 | 4,521,549 | **7,594,516** | 12,116,065 | **118,664** | 189,313 | 0 / 65,536 |
+| `e32,m8` | **759,705** | 4,014,570 | 12,661,042 | 16,675,612 | 197,828 | 260,556 | 0 / 65,536 |
+
+Batch-major m2 is its best complete FFT, while m4 has its best butterfly
+region. Comparing the best complete kernels, batch-major is `11.31x` slower
+than bin-major. Its best butterfly region is `9.09x` slower. At the same
+non-fused LMUL, batch-major is `7.89x` slower for m2, `9.79x` slower for m4,
+and `16.13x` slower for m8 in complete FFT cycles.
 
 #### Complete GENV512D64 timing data
 
 This Genesys2 FPGA measurement uses a 50 MHz clock, VLEN=512, D=64, cold boot,
-one shared twiddle plan, and 10 runs per variant. Twiddle plan creation took
-173,327 cycles. All six variants passed validation.
+one shared twiddle plan, and 10 runs per variant. It uses the current
+layout-comparison binary. Twiddle plan creation took 191,947 cycles. All nine
+variants passed validation with zero mismatches.
+
+##### Bin-major `[bin][batch]`
+
+RVV lanes span the 64 independent batches and use a scalar-broadcast twiddle.
 
 | Variant | Input layout | Bit reversal | Butterfly | FFT | Butterfly cycles/FFT | FFT cycles/FFT | Mismatches |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `e32,m2` | 462,990 | 212,642 | 1,669,023 | 1,881,665 | 26,078 | 29,401 | 0 / 65,536 |
-| `e32,m2-stage-fused` | 454,910 | 207,791 | 1,542,146 | 1,749,937 | 24,096 | 27,342 | 0 / 65,536 |
-| `e32,m4` | 443,783 | 207,792 | 1,679,955 | 1,887,747 | 26,249 | 29,496 | 0 / 65,536 |
-| `e32,m4-stage-fused` | 455,191 | 207,812 | 1,479,809 | 1,687,621 | 23,122 | 26,369 | 0 / 65,536 |
-| `e32,m8` | 454,915 | 206,941 | 1,675,761 | 1,882,702 | 26,183 | 29,417 | 0 / 65,536 |
-| `e32,m8-stage-fused` | 455,774 | 208,969 | 10,690,936 | 10,899,905 | 167,045 | 170,311 | 0 / 65,536 |
+| `e32,m2` | 463,015 | 212,756 | 1,673,672 | 1,886,428 | 26,151 | 29,475 | 0 / 65,536 |
+| `e32,m2-stage-fused` | 455,031 | 207,680 | 1,540,598 | 1,748,278 | 24,071 | 27,316 | 0 / 65,536 |
+| `e32,m4` | 453,916 | 227,765 | 1,681,172 | 1,908,937 | 26,268 | 29,827 | 0 / 65,536 |
+| `e32,m4-stage-fused` | 454,912 | 207,776 | **1,479,617** | **1,687,393** | **23,119** | **26,365** | 0 / 65,536 |
+| `e32,m8` | 454,995 | **206,888** | 1,678,834 | 1,885,722 | 26,231 | 29,464 | 0 / 65,536 |
+| `e32,m8-stage-fused` | 455,851 | 208,806 | 6,719,823 | 6,928,629 | 104,997 | 108,259 | 0 / 65,536 |
 
-On GENV512D64, stage fusion improves m2 by `1.08x` and m4 by `1.14x`, while
-fused m8 is `6.38x` slower than baseline m8. Fused m4 is the best kernel and
-is `1.13x` faster than baseline m8. The three non-fused LMUL baselines differ
-by less than 1%, showing that the D64 datapath dominates their throughput.
-Compared with GENV512D128, D64 roughly doubles the useful baseline/fused-m4
-cycles, while the m8 spill penalty remains severe.
+Stage fusion improves m2 by `1.09x` and m4 by `1.14x`, while fused m8 is
+`4.00x` slower than baseline m8. Fused m4 is the fastest bin-major kernel.
+The three non-fused LMUL baselines remain within approximately 1%, showing
+that the 64-bit datapath dominates their throughput.
+
+##### Batch-major `[batch][bin]`
+
+RVV lanes span consecutive bins within one FFT and load vector twiddles.
+
+| Variant | Input layout | Bit reversal | Butterfly | FFT | Butterfly cycles/FFT | FFT cycles/FFT | Mismatches |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `e32,m2` | 758,150 | **3,980,238** | **8,127,535** | **12,107,773** | **126,992** | **189,183** | 0 / 65,536 |
+| `e32,m4` | 763,322 | 4,506,248 | 8,246,211 | 12,752,459 | 128,847 | 199,257 | 0 / 65,536 |
+| `e32,m8` | **757,747** | 3,997,883 | 27,295,431 | 31,293,314 | 426,491 | 488,958 | 0 / 65,536 |
+
+Batch-major m2 is its best kernel at 12,107,773 complete FFT cycles. Comparing
+the best complete kernels, batch-major is `7.18x` slower than bin-major. Its
+best butterfly region is `5.49x` slower. At the same non-fused LMUL,
+batch-major is `6.42x` slower for m2, `6.68x` slower for m4, and `16.59x`
+slower for m8 in complete FFT cycles.
+
+Compared with GENV512D128, D64 roughly doubles the useful bin-major
+baseline/fused-m4 cycles. Its batch-major m8 is also especially expensive,
+consistent with spill traffic traversing the narrower datapath.
 
 #### Complete GENV512D128 timing data
 
 This Genesys2 FPGA measurement uses a 50 MHz clock, VLEN=512, D=128, cold boot,
-one shared twiddle plan, and 10 runs per variant. Twiddle plan creation took
-173,427 cycles. All six variants passed validation.
+one shared twiddle plan, and 10 runs per variant. It uses the current
+layout-comparison binary. Twiddle plan creation took 191,955 cycles. All nine
+variants passed validation with zero mismatches.
+
+##### Bin-major `[bin][batch]`
+
+RVV lanes span the 64 independent batches and use a scalar-broadcast twiddle.
 
 | Variant | Input layout | Bit reversal | Butterfly | FFT | Butterfly cycles/FFT | FFT cycles/FFT | Mismatches |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `e32,m2` | 464,239 | 158,133 | 908,958 | 1,067,091 | 14,202 | 16,673 | 0 / 65,536 |
-| `e32,m2-stage-fused` | 454,698 | 153,745 | 846,725 | 1,000,470 | 13,230 | 15,632 | 0 / 65,536 |
-| `e32,m4` | 444,147 | 153,836 | 827,396 | 981,232 | 12,928 | 15,331 | 0 / 65,536 |
-| `e32,m4-stage-fused` | 454,825 | 153,773 | 773,249 | 927,022 | 12,082 | 14,484 | 0 / 65,536 |
-| `e32,m8` | 454,572 | 152,458 | 831,771 | 984,229 | 12,996 | 15,378 | 0 / 65,536 |
-| `e32,m8-stage-fused` | 455,544 | 155,023 | 9,410,351 | 9,565,374 | 147,036 | 149,458 | 0 / 65,536 |
+| `e32,m2` | 464,384 | 158,005 | 911,399 | 1,069,404 | 14,240 | 16,709 | 0 / 65,536 |
+| `e32,m2-stage-fused` | 454,505 | 153,583 | 845,312 | 998,895 | 13,208 | 15,607 | 0 / 65,536 |
+| `e32,m4` | 454,102 | 173,327 | 829,309 | 1,002,636 | 12,957 | 15,666 | 0 / 65,536 |
+| `e32,m4-stage-fused` | 454,984 | 153,628 | **773,508** | **927,136** | **12,086** | **14,486** | 0 / 65,536 |
+| `e32,m8` | 454,734 | **152,576** | 835,376 | 987,952 | 13,052 | 15,436 | 0 / 65,536 |
+| `e32,m8-stage-fused` | 455,515 | 154,989 | 5,265,212 | 5,420,201 | 82,268 | 84,690 | 0 / 65,536 |
 
-On GENV512D128, stage fusion improves m2 by `1.07x` and m4 by `1.07x`, while
-fused m8 is `11.31x` slower than baseline m8. Fused m4 is the best kernel and
-is `1.08x` faster than baseline m8. The result closely matches LGVV512D128:
-both D128/VLEN=512 configurations favor m4 fusion and expose a roughly 11x m8
-spill penalty.
+Stage fusion improves m2 by `1.08x` and m4 by `1.07x`, while fused m8 is
+`6.30x` slower than baseline m8. Fused m4 is the fastest bin-major kernel.
+Both GENV512D128 and LGVV512D128 therefore favor m4 fusion and expose a severe
+m8 spill penalty (`6.30x` and `6.22x`, respectively).
+
+##### Batch-major `[batch][bin]`
+
+RVV lanes span consecutive bins within one FFT and load vector twiddles.
+
+| Variant | Input layout | Bit reversal | Butterfly | FFT | Butterfly cycles/FFT | FFT cycles/FFT | Mismatches |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `e32,m2` | 760,903 | **3,995,457** | **7,439,795** | **11,435,252** | **116,246** | **178,675** | 0 / 65,536 |
+| `e32,m4` | 766,423 | 4,523,880 | 7,607,431 | 12,131,311 | 118,866 | 189,551 | 0 / 65,536 |
+| `e32,m8` | **759,753** | 4,015,217 | 16,919,743 | 20,934,960 | 264,370 | 327,108 | 0 / 65,536 |
+
+Batch-major m2 is its best kernel at 11,435,252 complete FFT cycles. Comparing
+the best complete kernels, batch-major is `12.33x` slower than bin-major. Its
+best butterfly region is `9.62x` slower. At the same non-fused LMUL,
+batch-major is `10.69x` slower for m2, `12.10x` slower for m4, and `21.19x`
+slower for m8 in complete FFT cycles.
 
 #### Complete LGVV128D128 timing data
 
 This Genesys2 FPGA measurement uses a 50 MHz clock, VLEN=128, D=128, cold boot,
-one shared twiddle plan, and 10 runs per variant. Twiddle plan creation took
-173,398 cycles. All six variants passed validation.
+one shared twiddle plan, and 10 runs per variant. It uses the current
+layout-comparison binary. Twiddle plan creation took 192,070 cycles. All nine
+variants passed validation with zero mismatches.
+
+##### Bin-major `[bin][batch]`
+
+RVV lanes span the 64 independent batches and use a scalar-broadcast twiddle.
 
 | Variant | Input layout | Bit reversal | Butterfly | FFT | Butterfly cycles/FFT | FFT cycles/FFT | Mismatches |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `e32,m2` | 464,597 | 280,754 | 1,769,793 | 2,050,547 | 27,653 | 32,039 | 0 / 65,536 |
-| `e32,m2-stage-fused` | 454,706 | 273,557 | 1,357,547 | 1,631,104 | 21,211 | 25,486 | 0 / 65,536 |
-| `e32,m4` | 444,323 | 274,158 | 1,117,048 | 1,391,206 | 17,453 | 21,737 | 0 / 65,536 |
-| `e32,m4-stage-fused` | 454,784 | 273,519 | 1,006,731 | 1,280,250 | 15,730 | 20,003 | 0 / 65,536 |
-| `e32,m8` | 454,683 | 272,587 | 853,167 | 1,125,754 | 13,330 | 17,589 | 0 / 65,536 |
-| `e32,m8-stage-fused` | 455,207 | 274,010 | 1,543,727 | 1,817,737 | 24,120 | 28,402 | 0 / 65,536 |
+| `e32,m2` | 464,259 | 280,649 | 1,767,700 | 2,048,349 | 27,620 | 32,005 | 0 / 65,536 |
+| `e32,m2-stage-fused` | 454,721 | 273,342 | 1,358,129 | 1,631,471 | 21,220 | 25,491 | 0 / 65,536 |
+| `e32,m4` | 454,099 | 293,989 | 1,279,325 | 1,573,314 | 19,989 | 24,583 | 0 / 65,536 |
+| `e32,m4-stage-fused` | 454,482 | 273,641 | 1,007,728 | 1,281,369 | 15,745 | 20,021 | 0 / 65,536 |
+| `e32,m8` | 454,572 | **272,591** | **852,932** | **1,125,523** | **13,327** | **17,586** | 0 / 65,536 |
+| `e32,m8-stage-fused` | 455,028 | 273,927 | 1,545,075 | 1,819,002 | 24,141 | 28,421 | 0 / 65,536 |
 
-On LGVV128D128, stage fusion improves m2 by `1.30x` and m4 by `1.11x`, but
-makes m8 `1.81x` slower. Baseline m8 is the best kernel and is `1.18x` faster
-than fused m4. With VLEN=128, the 64-batch row requires eight m2 chunks, four
-m4 chunks, or two m8 chunks; the reduced instruction/chunk count makes
-baseline m8 beneficial despite the fixed D128 datapath, while fused m8 again
-suffers from whole-register spills.
+Stage fusion improves m2 by `1.30x` and m4 by `1.27x`, but makes m8 `1.81x`
+slower. Baseline m8 remains the fastest bin-major kernel. With VLEN=128, the
+64-batch row requires eight m2 chunks, four m4 chunks, or two m8 chunks, so
+m8's lower chunk count wins until stage fusion creates spill pressure.
+
+##### Batch-major `[batch][bin]`
+
+RVV lanes span consecutive bins within one FFT and load vector twiddles.
+
+| Variant | Input layout | Bit reversal | Butterfly | FFT | Butterfly cycles/FFT | FFT cycles/FFT | Mismatches |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `e32,m2` | 760,957 | **3,995,938** | 7,871,265 | **11,867,203** | 122,988 | **185,425** | 0 / 65,536 |
+| `e32,m4` | 766,342 | 4,523,634 | **7,474,891** | 11,998,525 | **116,795** | 187,476 | 0 / 65,536 |
+| `e32,m8` | **760,900** | 4,013,433 | 10,979,392 | 14,992,825 | 171,553 | 234,262 | 0 / 65,536 |
+
+Batch-major m2 is its best complete FFT at 11,867,203 cycles, while m4 has
+the best batch-major butterfly region. Comparing the best complete kernels,
+batch-major is `10.54x` slower than bin-major. Its best butterfly region is
+`8.76x` slower. At the same non-fused LMUL, batch-major is `5.79x` slower for
+m2, `7.63x` slower for m4, and `13.32x` slower for m8 in complete FFT cycles.
 
 #### Complete LGVV256D128 timing data
 
 This Genesys2 FPGA measurement uses a 50 MHz clock, VLEN=256, D=128, cold boot,
-one shared twiddle plan, and 10 runs per variant. Twiddle plan creation took
-173,353 cycles. All six variants passed validation.
+one shared twiddle plan, and 10 runs per variant. It uses the current
+layout-comparison binary. Twiddle plan creation took 191,850 cycles. All nine
+variants passed validation with zero mismatches.
+
+##### Bin-major `[bin][batch]`
+
+RVV lanes span the 64 independent batches and use a scalar-broadcast twiddle.
 
 | Variant | Input layout | Bit reversal | Butterfly | FFT | Butterfly cycles/FFT | FFT cycles/FFT | Mismatches |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `e32,m2` | 464,339 | 205,729 | 1,156,745 | 1,362,474 | 18,074 | 21,288 | 0 / 65,536 |
-| `e32,m2-stage-fused` | 454,808 | 199,062 | 984,563 | 1,183,625 | 15,383 | 18,494 | 0 / 65,536 |
-| `e32,m4` | 444,561 | 199,247 | 850,795 | 1,050,042 | 13,293 | 16,406 | 0 / 65,536 |
-| `e32,m4-stage-fused` | 455,030 | 199,703 | 848,839 | 1,048,542 | 13,263 | 16,383 | 0 / 65,536 |
-| `e32,m8` | 454,771 | 197,905 | 847,153 | 1,045,058 | 13,236 | 16,329 | 0 / 65,536 |
-| `e32,m8-stage-fused` | 455,030 | 200,121 | 1,214,008 | 1,414,129 | 18,968 | 22,095 | 0 / 65,536 |
+| `e32,m2` | 464,489 | 205,644 | 1,157,176 | 1,362,820 | 18,080 | 21,294 | 0 / 65,536 |
+| `e32,m2-stage-fused` | 454,853 | 199,454 | 985,849 | 1,185,303 | 15,403 | 18,520 | 0 / 65,536 |
+| `e32,m4` | 453,988 | 219,555 | 970,153 | 1,189,708 | 15,158 | 18,589 | 0 / 65,536 |
+| `e32,m4-stage-fused` | 454,831 | 198,823 | **847,929** | **1,046,752** | **13,248** | **16,355** | 0 / 65,536 |
+| `e32,m8` | 454,726 | **198,192** | 853,838 | 1,052,030 | 13,341 | 16,437 | 0 / 65,536 |
+| `e32,m8-stage-fused` | 455,256 | 200,140 | 1,214,280 | 1,414,420 | 18,973 | 22,100 | 0 / 65,536 |
 
-On LGVV256D128, stage fusion improves m2 by `1.17x`, changes m4 by only
-`1.002x`, and makes m8 `1.43x` slower. Baseline m8 is the best kernel, although
-it is only `1.002x` faster than fused m4. At VLEN=256, m4 uses VL=32 and needs
-two batch chunks, whereas m8 uses VL=64 and covers the batch row once; the
-near-equal cycles show that larger instruction coverage does not translate
-into proportional throughput on this D128 hardware. Fused m8 still suffers
-heavy register spilling.
+Stage fusion improves m2 by `1.17x` and m4 by `1.14x`, while fused m8 is
+`1.42x` slower than baseline m8. Fused m4 is the fastest complete bin-major
+kernel and is only `1.005x` faster than baseline m8.
+
+##### Batch-major `[batch][bin]`
+
+RVV lanes span consecutive bins within one FFT and load vector twiddles.
+
+| Variant | Input layout | Bit reversal | Butterfly | FFT | Butterfly cycles/FFT | FFT cycles/FFT | Mismatches |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `e32,m2` | 761,073 | **3,995,939** | 7,261,799 | **11,257,738** | 113,465 | **175,902** | 0 / 65,536 |
+| `e32,m4` | 765,540 | 4,524,250 | **7,204,966** | 11,729,216 | **112,577** | 183,269 | 0 / 65,536 |
+| `e32,m8` | **760,008** | 4,013,008 | 12,641,780 | 16,654,788 | 197,527 | 260,231 | 0 / 65,536 |
+
+Batch-major m2 is its best complete FFT at 11,257,738 cycles. Comparing the
+best complete kernel from each layout, batch-major is `10.75x` slower. Its best
+butterfly region, batch-major m4, is `8.50x` slower than bin-major fused m4.
+At the same non-fused LMUL, batch-major is `8.26x` slower for m2, `9.86x`
+slower for m4, and `15.83x` slower for m8 in complete FFT cycles.
 
 #### Complete LGVV512D128 timing data
 
 This Genesys2 FPGA measurement uses a 50 MHz clock, VLEN=512, D=128, cold boot,
-one shared twiddle plan, and 10 runs per LMUL variant. Twiddle plan creation
-took 173,443 cycles. All six variants passed validation.
+one shared twiddle plan, and 10 runs per LMUL variant. It is the current
+layout-comparison binary and explicitly reports `[bin][batch]` as bin-major
+and `[batch][bin]` as batch-major. Twiddle plan creation took 191,850 cycles.
+All nine variants passed validation with zero mismatches.
+
+##### Bin-major `[bin][batch]`
+
+RVV lanes span the 64 independent batches and each butterfly broadcasts one
+scalar twiddle across those lanes.
 
 | Variant | Input layout | Bit reversal | Butterfly | FFT | Butterfly cycles/FFT | FFT cycles/FFT | Mismatches |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `e32,m2` | 464,102 | 158,021 | 862,190 | 1,020,211 | 13,471 | 15,940 | 0 / 65,536 |
-| `e32,m2-stage-fused` | 454,545 | 153,760 | 844,371 | 998,131 | 13,193 | 15,595 | 0 / 65,536 |
-| `e32,m4` | 444,314 | 154,118 | 847,393 | 1,001,511 | 13,240 | 15,648 | 0 / 65,536 |
-| `e32,m4-stage-fused` | 454,927 | 153,485 | 772,922 | 926,407 | 12,076 | 14,475 | 0 / 65,536 |
-| `e32,m8` | 454,491 | 152,842 | 847,515 | 1,000,357 | 13,242 | 15,630 | 0 / 65,536 |
-| `e32,m8-stage-fused` | 455,401 | 155,144 | 9,403,442 | 9,558,586 | 146,928 | 149,352 | 0 / 65,536 |
+| `e32,m2` | 464,266 | 158,145 | 861,070 | 1,019,215 | 13,454 | 15,925 | 0 / 65,536 |
+| `e32,m2-stage-fused` | 454,708 | 153,892 | 842,949 | 996,841 | 13,171 | 15,575 | 0 / 65,536 |
+| `e32,m4` | 453,785 | 173,464 | 828,128 | 1,001,592 | 12,939 | 15,649 | 0 / 65,536 |
+| `e32,m4-stage-fused` | 454,716 | 153,707 | **773,128** | **926,835** | **12,080** | **14,481** | 0 / 65,536 |
+| `e32,m8` | 454,731 | 152,502 | 854,032 | 1,006,534 | 13,344 | 15,727 | 0 / 65,536 |
+| `e32,m8-stage-fused` | 455,373 | 154,892 | 5,316,059 | 5,470,951 | 83,063 | 85,483 | 0 / 65,536 |
 
-The three non-fused baselines remain nearly identical on LGVV512D128. Stage
-fusion improves m2 by only `1.02x`, but improves m4 by `1.10x`; fused m4 is the
-fastest measured hardware kernel and is `1.10x` faster than baseline m8. In
-contrast, fused m8 is `11.10x` slower than baseline m8. The hardware penalty is
-far larger than Spike's `1.23x` slowdown and is consistent with the many m8
-whole-register spills seen in disassembly. This result demonstrates that the
-cost of spill/reload traffic is strongly microarchitecture-dependent and that
-the largest LMUL is not optimal once multiple FFT stages are kept live.
+Stage fusion improves m2 by `1.02x` and m4 by `1.07x`; fused m4 is the fastest
+bin-major kernel. In contrast, fused m8 is `6.22x` slower than baseline m8.
+This agrees with the V512D128B disassembly: fused m2 has no whole-register
+spill, fused m4 has one `vs4r.v`/`vl4re32.v` pair, and fused m8 contains many
+`vs8r.v`/`vl8re32.v` spills.
+
+##### Batch-major `[batch][bin]`
+
+RVV lanes span consecutive bins within one FFT. Consequently each vector
+operation loads a vector of twiddles, and bit reversal is performed separately
+for all 64 batches.
+
+| Variant | Input layout | Bit reversal | Butterfly | FFT | Butterfly cycles/FFT | FFT cycles/FFT | Mismatches |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `e32,m2` | 760,478 | **3,995,076** | **7,027,531** | **11,022,607** | **109,805** | **172,228** | 0 / 65,536 |
+| `e32,m4` | 765,194 | 4,523,114 | 7,086,306 | 11,609,420 | 110,723 | 181,397 | 0 / 65,536 |
+| `e32,m8` | **760,099** | 4,015,303 | 16,912,003 | 20,927,306 | 264,250 | 326,989 | 0 / 65,536 |
+
+Batch-major m2 is its best complete FFT at 11,022,607 cycles. Comparing the
+best complete kernel from each layout, batch-major m2 is `11.89x` slower than
+bin-major fused m4. Even before bit reversal, its best butterfly region is
+`9.09x` slower. At the same non-fused LMUL, batch-major is `10.81x` slower for
+m2, `11.59x` slower for m4, and `20.79x` slower for m8 in complete FFT cycles.
+The result strongly favors bin-major when 64 independent FFT batches are
+available.
 
 ### Archived earlier results
 

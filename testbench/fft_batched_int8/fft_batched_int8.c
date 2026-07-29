@@ -11,7 +11,44 @@
 
 #include "fft_batched_int8_runner.h"
 #include "fft_int8_vectors.h"
+#include "fft_mixed_radix_q7.h"
 #include "nn_runtime.h"
+
+#ifndef __RISCV_VXRM_RNU
+#define __RISCV_VXRM_RNU 0
+#endif
+
+#if __GNUC__ < 14
+/*
+ * GCC 13 implements the RVV 0.11 intrinsic signatures, where fixed-point
+ * rounding is selected through vxrm instead of an explicit intrinsic
+ * argument. Keep the source compatible with both APIs.
+ */
+#define __riscv_vnclip_wx_i16m1(v, s, rm, vl) \
+    __riscv_vnclip_wx_i16m1(v, s, vl)
+#define __riscv_vnclip_wx_i16m2(v, s, rm, vl) \
+    __riscv_vnclip_wx_i16m2(v, s, vl)
+#define __riscv_vnclip_wx_i16m4(v, s, rm, vl) \
+    __riscv_vnclip_wx_i16m4(v, s, vl)
+#define __riscv_vnclip_wx_i8mf2(v, s, rm, vl) \
+    __riscv_vnclip_wx_i8mf2(v, s, vl)
+#define __riscv_vnclip_wx_i8m1(v, s, rm, vl) \
+    __riscv_vnclip_wx_i8m1(v, s, vl)
+#define __riscv_vnclip_wx_i8m2(v, s, rm, vl) \
+    __riscv_vnclip_wx_i8m2(v, s, vl)
+#define __riscv_vaadd_vv_i8mf2(a, b, rm, vl) \
+    __riscv_vaadd_vv_i8mf2(a, b, vl)
+#define __riscv_vaadd_vv_i8m1(a, b, rm, vl) \
+    __riscv_vaadd_vv_i8m1(a, b, vl)
+#define __riscv_vaadd_vv_i8m2(a, b, rm, vl) \
+    __riscv_vaadd_vv_i8m2(a, b, vl)
+#define __riscv_vasub_vv_i8mf2(a, b, rm, vl) \
+    __riscv_vasub_vv_i8mf2(a, b, vl)
+#define __riscv_vasub_vv_i8m1(a, b, rm, vl) \
+    __riscv_vasub_vv_i8m1(a, b, vl)
+#define __riscv_vasub_vv_i8m2(a, b, rm, vl) \
+    __riscv_vasub_vv_i8m2(a, b, vl)
+#endif
 
 #define FFT_INT8_BENCHMARK_RUNS 10u
 
@@ -27,6 +64,23 @@ typedef struct {
     int8_t *twiddle_real;
     int8_t *twiddle_imag;
 } fft_plan_q7_t;
+
+static int8_t mixed_permuted_real[FFT_INT8_SIZE * FFT_INT8_BATCH_COUNT]
+    __attribute__((aligned(64)));
+static int8_t mixed_permuted_imag[FFT_INT8_SIZE * FFT_INT8_BATCH_COUNT]
+    __attribute__((aligned(64)));
+static int8_t mixed_output_real[FFT_MIXED_Q7_MAX_RADIX]
+                                [FFT_INT8_BATCH_COUNT]
+    __attribute__((aligned(64)));
+static int8_t mixed_output_imag[FFT_MIXED_Q7_MAX_RADIX]
+                                [FFT_INT8_BATCH_COUNT]
+    __attribute__((aligned(64)));
+static uint16_t batch_major_reverse_index[FFT_INT8_SIZE]
+    __attribute__((aligned(64)));
+static int8_t batch_major_reverse_real[FFT_INT8_SIZE]
+    __attribute__((aligned(64)));
+static int8_t batch_major_reverse_imag[FFT_INT8_SIZE]
+    __attribute__((aligned(64)));
 
 static void print_u64_decimal(uint64_t value)
 {
@@ -108,11 +162,34 @@ static void fft_plan_destroy_q7(fft_plan_q7_t *plan)
 
 static void fft_plan_load_input_q7(const fft_plan_q7_t *plan)
 {
+    /*
+     * BIN-MAJOR layout: [bin][batch]
+     * linear offset = bin * batch_count + batch.
+     * A contiguous RVV vector therefore contains one FFT bin from many
+     * independent batches. One scalar twiddle is shared by every lane.
+     */
     for (size_t index = 0; index < plan->size; ++index) {
         size_t row = index * plan->batch_count;
         for (size_t batch = 0; batch < plan->batch_count; ++batch) {
             plan->data_real[row + batch] = fft_int8_input_real[index];
             plan->data_imag[row + batch] = fft_int8_input_imag[index];
+        }
+    }
+}
+
+static void fft_plan_load_input_batch_major_q7(const fft_plan_q7_t *plan)
+{
+    /*
+     * BATCH-MAJOR layout: [batch][bin]
+     * linear offset = batch * FFT_size + bin.
+     * A contiguous RVV vector contains consecutive bins from one FFT, so
+     * adjacent lanes generally require different twiddle factors.
+     */
+    for (size_t batch = 0; batch < plan->batch_count; ++batch) {
+        size_t base = batch * plan->size;
+        for (size_t bin = 0; bin < plan->size; ++bin) {
+            plan->data_real[base + bin] = fft_int8_input_real[bin];
+            plan->data_imag[base + bin] = fft_int8_input_imag[bin];
         }
     }
 }
@@ -135,6 +212,129 @@ static void swap_rows_e8m1(int8_t *a_real,
         __riscv_vse8_v_i8m1(b_imag, ai, vl);
         a_real += vl; a_imag += vl; b_real += vl; b_imag += vl; count -= vl;
     }
+}
+
+static int fft_mixed_radix_rvv_q7(
+    const fft_plan_q7_t *plan, const fft_mixed_q7_plan_t *mixed_plan)
+{
+    for (size_t destination = 0; destination < plan->size; ++destination) {
+        size_t source = fft_mixed_q7_source_index(destination);
+        size_t destination_row = destination * plan->batch_count;
+        size_t source_row = source * plan->batch_count;
+        for (size_t batch = 0; batch < plan->batch_count;) {
+            size_t vl = __riscv_vsetvl_e8m1(plan->batch_count - batch);
+            if (vl == 0) return 0;
+            vint8m1_t real = __riscv_vle8_v_i8m1(
+                &plan->data_real[source_row + batch], vl);
+            vint8m1_t imag = __riscv_vle8_v_i8m1(
+                &plan->data_imag[source_row + batch], vl);
+            __riscv_vse8_v_i8m1(
+                &mixed_permuted_real[destination_row + batch], real, vl);
+            __riscv_vse8_v_i8m1(
+                &mixed_permuted_imag[destination_row + batch], imag, vl);
+            batch += vl;
+        }
+    }
+    for (size_t pos = 0; pos < plan->size * plan->batch_count;) {
+        size_t vl = __riscv_vsetvl_e8m1(
+            plan->size * plan->batch_count - pos);
+        if (vl == 0) return 0;
+        vint8m1_t real =
+            __riscv_vle8_v_i8m1(&mixed_permuted_real[pos], vl);
+        vint8m1_t imag =
+            __riscv_vle8_v_i8m1(&mixed_permuted_imag[pos], vl);
+        __riscv_vse8_v_i8m1(&plan->data_real[pos], real, vl);
+        __riscv_vse8_v_i8m1(&plan->data_imag[pos], imag, vl);
+        pos += vl;
+    }
+
+    for (size_t transform_index = 0;
+         transform_index < mixed_plan->count; ++transform_index) {
+        const fft_mixed_q7_transform_t *transform =
+            &mixed_plan->transform[transform_index];
+        size_t radix = transform->radix;
+        size_t span = transform->span;
+        size_t previous_span = transform->previous_span;
+        size_t offset = transform->offset;
+        for (size_t block = 0; block < plan->size; block += span) {
+            for (size_t output = 0; output < radix; ++output) {
+                for (size_t batch = 0; batch < plan->batch_count;) {
+                    size_t vl =
+                        __riscv_vsetvl_e8m2(plan->batch_count - batch);
+                    if (vl == 0) return 0;
+                    vint32m8_t real_acc =
+                        __riscv_vmv_v_x_i32m8(0, vl);
+                    vint32m8_t imag_acc =
+                        __riscv_vmv_v_x_i32m8(0, vl);
+                    for (size_t input = 0; input < radix; ++input) {
+                        size_t bin =
+                            block + offset + input * previous_span;
+                        size_t pos = data_offset(plan, bin, batch);
+                        vint8m2_t br =
+                            __riscv_vle8_v_i8m2(&plan->data_real[pos], vl);
+                        vint8m2_t bi =
+                            __riscv_vle8_v_i8m2(&plan->data_imag[pos], vl);
+                        vint16m4_t product16 =
+                            __riscv_vwmul_vx_i16m4(br,
+                                transform->coefficient[0][0][output][input],
+                                vl);
+                        vint32m8_t product =
+                            __riscv_vsext_vf2_i32m8(product16, vl);
+                        real_acc = __riscv_vadd_vv_i32m8(
+                            real_acc, product, vl);
+                        product16 = __riscv_vwmul_vx_i16m4(bi,
+                            transform->coefficient[0][1][output][input], vl);
+                        product = __riscv_vsext_vf2_i32m8(product16, vl);
+                        real_acc = __riscv_vadd_vv_i32m8(
+                            real_acc, product, vl);
+                        product16 = __riscv_vwmul_vx_i16m4(br,
+                            transform->coefficient[1][0][output][input], vl);
+                        product = __riscv_vsext_vf2_i32m8(product16, vl);
+                        imag_acc = __riscv_vadd_vv_i32m8(
+                            imag_acc, product, vl);
+                        product16 = __riscv_vwmul_vx_i16m4(bi,
+                            transform->coefficient[1][1][output][input], vl);
+                        product = __riscv_vsext_vf2_i32m8(product16, vl);
+                        imag_acc = __riscv_vadd_vv_i32m8(
+                            imag_acc, product, vl);
+                    }
+                    unsigned shift = 7 + transform->log2_radix;
+                    vint16m4_t real16 = __riscv_vnclip_wx_i16m4(
+                        real_acc, shift, __RISCV_VXRM_RNU, vl);
+                    vint16m4_t imag16 = __riscv_vnclip_wx_i16m4(
+                        imag_acc, shift, __RISCV_VXRM_RNU, vl);
+                    vint8m2_t real8 = __riscv_vnclip_wx_i8m2(
+                        real16, 0, __RISCV_VXRM_RNU, vl);
+                    vint8m2_t imag8 = __riscv_vnclip_wx_i8m2(
+                        imag16, 0, __RISCV_VXRM_RNU, vl);
+                    __riscv_vse8_v_i8m2(
+                        &mixed_output_real[output][batch], real8, vl);
+                    __riscv_vse8_v_i8m2(
+                        &mixed_output_imag[output][batch], imag8, vl);
+                    batch += vl;
+                }
+            }
+            for (size_t output = 0; output < radix; ++output) {
+                size_t bin = block + offset + output * previous_span;
+                size_t row = bin * plan->batch_count;
+                for (size_t batch = 0; batch < plan->batch_count;) {
+                    size_t vl =
+                        __riscv_vsetvl_e8m1(plan->batch_count - batch);
+                    if (vl == 0) return 0;
+                    vint8m1_t real = __riscv_vle8_v_i8m1(
+                        &mixed_output_real[output][batch], vl);
+                    vint8m1_t imag = __riscv_vle8_v_i8m1(
+                        &mixed_output_imag[output][batch], vl);
+                    __riscv_vse8_v_i8m1(
+                        &plan->data_real[row + batch], real, vl);
+                    __riscv_vse8_v_i8m1(
+                        &plan->data_imag[row + batch], imag, vl);
+                    batch += vl;
+                }
+            }
+        }
+    }
+    return 1;
 }
 
 static inline void butterfly_q7(int8_t *restrict even_real,
@@ -245,6 +445,87 @@ DEFINE_Q7_BUTTERFLY(m4, vint8m1_t, vint16m2_t, vint32m4_t,
     __riscv_vnclip_wx_i16m2, __riscv_vnclip_wx_i8m1,
     __riscv_vaadd_vv_i8m1, __riscv_vasub_vv_i8m1, __riscv_vse8_v_i8m1)
 
+#define DEFINE_Q7_BATCH_MAJOR_VARIANT(NAME, T8, T16, T32, SETVL, LOAD8, \
+    WMUL16, SEXT32, SUB32, ADD32, NCLIP16, NCLIP8, VAADD8, VASUB8, STORE8) \
+static int fft_batch_major_q7_##NAME(const fft_plan_q7_t *plan) \
+{ \
+    /* BATCH-MAJOR: process one FFT at a time and vectorize its bin offset. */ \
+    for (size_t batch = 0; batch < plan->batch_count; ++batch) { \
+        size_t batch_base = batch * plan->size; \
+        int8_t *real = &plan->data_real[batch_base]; \
+        int8_t *imag = &plan->data_imag[batch_base]; \
+        for (size_t bs = 2; bs <= plan->size; bs <<= 1) { \
+            size_t half = bs >> 1; \
+            size_t stage_base = half - 1; \
+            for (size_t block = 0; block < plan->size; block += bs) { \
+                size_t odd = block + half; \
+                int32_t er = real[block], ei = imag[block]; \
+                int32_t or_ = real[odd], oi = imag[odd]; \
+                real[block] = (int8_t)fft_mixed_q7_rnu_shift(er + or_, 1); \
+                imag[block] = (int8_t)fft_mixed_q7_rnu_shift(ei + oi, 1); \
+                real[odd] = (int8_t)fft_mixed_q7_rnu_shift(er - or_, 1); \
+                imag[odd] = (int8_t)fft_mixed_q7_rnu_shift(ei - oi, 1); \
+                for (size_t off = 1; off < half;) { \
+                    size_t vl = SETVL(half - off); \
+                    if (vl == 0) return 0; \
+                    T8 erv = LOAD8(&real[block + off], vl); \
+                    T8 eiv = LOAD8(&imag[block + off], vl); \
+                    T8 orv = LOAD8(&real[block + half + off], vl); \
+                    T8 oiv = LOAD8(&imag[block + half + off], vl); \
+                    T8 wrv = LOAD8(&plan->twiddle_real[stage_base + off], vl); \
+                    T8 wiv = LOAD8(&plan->twiddle_imag[stage_base + off], vl); \
+                    T16 p16 = WMUL16(orv, wrv, vl); \
+                    T16 q16 = WMUL16(oiv, wiv, vl); \
+                    T32 p32 = SEXT32(p16, vl); \
+                    T32 q32 = SEXT32(q16, vl); \
+                    p32 = SUB32(p32, q32, vl); \
+                    p16 = NCLIP16(p32, 7, __RISCV_VXRM_RNU, vl); \
+                    T8 tr = NCLIP8(p16, 0, __RISCV_VXRM_RNU, vl); \
+                    p16 = WMUL16(oiv, wrv, vl); \
+                    q16 = WMUL16(orv, wiv, vl); \
+                    p32 = SEXT32(p16, vl); \
+                    q32 = SEXT32(q16, vl); \
+                    p32 = ADD32(p32, q32, vl); \
+                    p16 = NCLIP16(p32, 7, __RISCV_VXRM_RNU, vl); \
+                    T8 ti = NCLIP8(p16, 0, __RISCV_VXRM_RNU, vl); \
+                    T8 upper_r = VAADD8(erv, tr, __RISCV_VXRM_RNU, vl); \
+                    T8 lower_r = VASUB8(erv, tr, __RISCV_VXRM_RNU, vl); \
+                    T8 upper_i = VAADD8(eiv, ti, __RISCV_VXRM_RNU, vl); \
+                    T8 lower_i = VASUB8(eiv, ti, __RISCV_VXRM_RNU, vl); \
+                    STORE8(&real[block + off], upper_r, vl); \
+                    STORE8(&imag[block + off], upper_i, vl); \
+                    STORE8(&real[block + half + off], lower_r, vl); \
+                    STORE8(&imag[block + half + off], lower_i, vl); \
+                    off += vl; \
+                } \
+            } \
+        } \
+    } \
+    return 1; \
+}
+
+DEFINE_Q7_BATCH_MAJOR_VARIANT(m2, vint8mf2_t, vint16m1_t, vint32m2_t,
+    __riscv_vsetvl_e8mf2, __riscv_vle8_v_i8mf2,
+    __riscv_vwmul_vv_i16m1, __riscv_vsext_vf2_i32m2,
+    __riscv_vsub_vv_i32m2, __riscv_vadd_vv_i32m2,
+    __riscv_vnclip_wx_i16m1, __riscv_vnclip_wx_i8mf2,
+    __riscv_vaadd_vv_i8mf2, __riscv_vasub_vv_i8mf2,
+    __riscv_vse8_v_i8mf2)
+DEFINE_Q7_BATCH_MAJOR_VARIANT(m4, vint8m1_t, vint16m2_t, vint32m4_t,
+    __riscv_vsetvl_e8m1, __riscv_vle8_v_i8m1,
+    __riscv_vwmul_vv_i16m2, __riscv_vsext_vf2_i32m4,
+    __riscv_vsub_vv_i32m4, __riscv_vadd_vv_i32m4,
+    __riscv_vnclip_wx_i16m2, __riscv_vnclip_wx_i8m1,
+    __riscv_vaadd_vv_i8m1, __riscv_vasub_vv_i8m1,
+    __riscv_vse8_v_i8m1)
+DEFINE_Q7_BATCH_MAJOR_VARIANT(m8, vint8m2_t, vint16m4_t, vint32m8_t,
+    __riscv_vsetvl_e8m2, __riscv_vle8_v_i8m2,
+    __riscv_vwmul_vv_i16m4, __riscv_vsext_vf2_i32m8,
+    __riscv_vsub_vv_i32m8, __riscv_vadd_vv_i32m8,
+    __riscv_vnclip_wx_i16m4, __riscv_vnclip_wx_i8m2,
+    __riscv_vaadd_vv_i8m2, __riscv_vasub_vv_i8m2,
+    __riscv_vse8_v_i8m2)
+
 static inline void butterfly_unity_q7(int8_t *restrict even_real,
                                       int8_t *restrict even_imag,
                                       int8_t *restrict odd_real,
@@ -268,6 +549,7 @@ static inline void butterfly_unity_q7(int8_t *restrict even_real,
 
 static void fft_bit_reverse_rvv_q7(const fft_plan_q7_t *plan)
 {
+    /* BIN-MAJOR: one row swap moves the same two bins for all 64 batches. */
     for (size_t index = 0; index < plan->size; ++index) {
         size_t reversed = reverse_bits((unsigned)index, plan->stage_count);
         if (reversed <= index) continue;
@@ -276,6 +558,31 @@ static void fft_bit_reverse_rvv_q7(const fft_plan_q7_t *plan)
         swap_rows_e8m1(&plan->data_real[a], &plan->data_imag[a],
                        &plan->data_real[b], &plan->data_imag[b],
                        plan->batch_count);
+    }
+}
+
+static void fft_bit_reverse_batch_major_q7(const fft_plan_q7_t *plan)
+{
+    /* BATCH-MAJOR: each batch owns a separate contiguous 1,024-bin FFT. */
+    for (size_t batch = 0; batch < plan->batch_count; ++batch) {
+        size_t base = batch * plan->size;
+        for (size_t bin = 0; bin < plan->size; ++bin) {
+            size_t source = batch_major_reverse_index[bin];
+            batch_major_reverse_real[bin] =
+                plan->data_real[base + source];
+            batch_major_reverse_imag[bin] =
+                plan->data_imag[base + source];
+        }
+        for (size_t bin = 0; bin < plan->size;) {
+            size_t vl = __riscv_vsetvl_e8m1(plan->size - bin);
+            vint8m1_t real =
+                __riscv_vle8_v_i8m1(&batch_major_reverse_real[bin], vl);
+            vint8m1_t imag =
+                __riscv_vle8_v_i8m1(&batch_major_reverse_imag[bin], vl);
+            __riscv_vse8_v_i8m1(&plan->data_real[base + bin], real, vl);
+            __riscv_vse8_v_i8m1(&plan->data_imag[base + bin], imag, vl);
+            bin += vl;
+        }
     }
 }
 
@@ -581,7 +888,7 @@ static int run_q7_variant(fft_plan_q7_t *plan, const char *name,
     reverse /= FFT_INT8_BENCHMARK_RUNS;
     butterfly /= FFT_INT8_BENCHMARK_RUNS;
     size_t mismatches = count_mismatches_q7(plan);
-    printf("\nRVV int8 variant: %s\nbenchmark runs: %u\n", name,
+    printf("\nRVV int8 bin-major variant: %s\nbenchmark runs: %u\n", name,
         FFT_INT8_BENCHMARK_RUNS);
     printf("average input layout cycles: "); print_u64_decimal(layout);
     printf("\naverage bit reversal cycles: "); print_u64_decimal(reverse);
@@ -589,16 +896,146 @@ static int run_q7_variant(fft_plan_q7_t *plan, const char *name,
     printf("\naverage FFT cycles: "); print_u64_decimal(reverse + butterfly);
     printf("\nmismatched complex points: %u / %u\n", (unsigned)mismatches,
         (unsigned)(plan->size * plan->batch_count));
-    printf("FFT int8 RVV %s: %s\n", name,
+    printf("FFT int8 RVV bin-major %s: %s\n", name,
         vl_ok && mismatches == 0 ? "PASS" : "FAIL");
     return vl_ok && mismatches == 0;
 }
 
+static int run_batch_major_q7_variant(
+    fft_plan_q7_t *plan, const char *name, fft_q7_function_t function)
+{
+    uint64_t layout = 0, reverse = 0, butterfly = 0;
+    int vl_ok = 1;
+    for (unsigned run = 0; run < FFT_INT8_BENCHMARK_RUNS; ++run) {
+        uint64_t begin = nn_runtime_read_cycles();
+        fft_plan_load_input_batch_major_q7(plan);
+        uint64_t layout_end = nn_runtime_read_cycles();
+        fft_bit_reverse_batch_major_q7(plan);
+        uint64_t reverse_end = nn_runtime_read_cycles();
+        vl_ok &= function(plan);
+        uint64_t end = nn_runtime_read_cycles();
+        layout += layout_end - begin;
+        reverse += reverse_end - layout_end;
+        butterfly += end - reverse_end;
+    }
+    layout /= FFT_INT8_BENCHMARK_RUNS;
+    reverse /= FFT_INT8_BENCHMARK_RUNS;
+    butterfly /= FFT_INT8_BENCHMARK_RUNS;
+
+    size_t mismatches = 0;
+    for (size_t batch = 0; batch < plan->batch_count; ++batch) {
+        size_t base = batch * plan->size;
+        for (size_t bin = 0; bin < plan->size; ++bin)
+            if (plan->data_real[base + bin] !=
+                    fft_int8_groundtruth_real[bin] ||
+                plan->data_imag[base + bin] !=
+                    fft_int8_groundtruth_imag[bin])
+                ++mismatches;
+    }
+
+    printf("\nRVV int8 batch-major variant: %s\nbenchmark runs: %u\n",
+        name, FFT_INT8_BENCHMARK_RUNS);
+    printf("average input layout cycles: "); print_u64_decimal(layout);
+    printf("\naverage bit reversal cycles: "); print_u64_decimal(reverse);
+    printf("\naverage butterfly cycles: "); print_u64_decimal(butterfly);
+    printf("\naverage FFT cycles: "); print_u64_decimal(reverse + butterfly);
+    printf("\nmismatched complex points: %u / %u\n", (unsigned)mismatches,
+        (unsigned)(plan->size * plan->batch_count));
+    printf("FFT int8 RVV batch-major %s: %s\n", name,
+        vl_ok && mismatches == 0 ? "PASS" : "FAIL");
+    return vl_ok && mismatches == 0;
+}
+
+static int run_mixed_radix_q7_variant(
+    fft_plan_q7_t *plan, const fft_mixed_q7_plan_t *mixed_plan)
+{
+    int8_t reference_real[FFT_INT8_SIZE];
+    int8_t reference_imag[FFT_INT8_SIZE];
+    for (size_t bin = 0; bin < plan->size; ++bin) {
+        reference_real[bin] = fft_int8_input_real[bin];
+        reference_imag[bin] = fft_int8_input_imag[bin];
+    }
+    fft_mixed_q7_scalar(
+        mixed_plan, reference_real, reference_imag, plan->size);
+
+    uint64_t layout = 0, fft = 0;
+    int vl_ok = 1;
+    for (unsigned run = 0; run < FFT_INT8_BENCHMARK_RUNS; ++run) {
+        uint64_t begin = nn_runtime_read_cycles();
+        fft_plan_load_input_q7(plan);
+        uint64_t layout_end = nn_runtime_read_cycles();
+        vl_ok &= fft_mixed_radix_rvv_q7(plan, mixed_plan);
+        uint64_t end = nn_runtime_read_cycles();
+        layout += layout_end - begin;
+        fft += end - layout_end;
+    }
+    layout /= FFT_INT8_BENCHMARK_RUNS;
+    fft /= FFT_INT8_BENCHMARK_RUNS;
+
+    size_t reference_mismatches = 0, radix2_differences = 0;
+    size_t within_one = 0;
+    uint64_t absolute_error_sum = 0;
+    unsigned max_component_error = 0;
+    for (size_t bin = 0; bin < plan->size; ++bin)
+        for (size_t batch = 0; batch < plan->batch_count; ++batch) {
+            size_t pos = data_offset(plan, bin, batch);
+            int8_t actual_real = plan->data_real[pos];
+            int8_t actual_imag = plan->data_imag[pos];
+            if (actual_real != reference_real[bin] ||
+                actual_imag != reference_imag[bin])
+                ++reference_mismatches;
+            if (actual_real != fft_int8_groundtruth_real[bin] ||
+                actual_imag != fft_int8_groundtruth_imag[bin])
+                ++radix2_differences;
+            int real_error =
+                (int)actual_real - fft_int8_groundtruth_real[bin];
+            int imag_error =
+                (int)actual_imag - fft_int8_groundtruth_imag[bin];
+            if (real_error < 0) real_error = -real_error;
+            if (imag_error < 0) imag_error = -imag_error;
+            absolute_error_sum += (unsigned)real_error + (unsigned)imag_error;
+            if (real_error <= 1 && imag_error <= 1) ++within_one;
+            if ((unsigned)real_error > max_component_error)
+                max_component_error = (unsigned)real_error;
+            if ((unsigned)imag_error > max_component_error)
+                max_component_error = (unsigned)imag_error;
+        }
+
+    printf("\nRVV int8 bin-major variant: mixed-radix-4-16-16 m8\n");
+    printf("benchmark runs: %u\n", FFT_INT8_BENCHMARK_RUNS);
+    printf("dense transforms per FFT: %u\n", (unsigned)mixed_plan->count);
+    printf("average input layout cycles: "); print_u64_decimal(layout);
+    printf("\naverage FFT cycles: "); print_u64_decimal(fft);
+    printf("\nmixed-radix-reference mismatched complex points: %u / %u\n",
+        (unsigned)reference_mismatches,
+        (unsigned)(plan->size * plan->batch_count));
+    printf("radix-2-groundtruth differing complex points: %u / %u\n",
+        (unsigned)radix2_differences,
+        (unsigned)(plan->size * plan->batch_count));
+    printf("radix-2-groundtruth points within +/-1 per component: %u / %u\n",
+        (unsigned)within_one,
+        (unsigned)(plan->size * plan->batch_count));
+    printf("radix-2-groundtruth mean absolute component error x1000: %lu\n",
+        (unsigned long)(absolute_error_sum * 1000 /
+            (2 * plan->size * plan->batch_count)));
+    printf("radix-2-groundtruth maximum component error: %u\n",
+        max_component_error);
+    printf("FFT int8 RVV bin-major mixed-radix-4-16-16: %s\n",
+        vl_ok && reference_mismatches == 0 ? "PASS" : "FAIL");
+    return vl_ok && reference_mismatches == 0;
+}
+
 int fft_batched_int8_testbench_run(void)
 {
+    __asm__ volatile("csrwi vxrm, 0");
     fft_plan_q7_t plan;
+    static fft_mixed_q7_plan_t mixed_plan;
     uint64_t plan_start = nn_runtime_read_cycles();
     int plan_ok = fft_plan_init_q7(&plan, FFT_INT8_SIZE, FFT_INT8_BATCH_COUNT);
+    fft_mixed_q7_plan_init(&mixed_plan);
+    for (size_t bin = 0; bin < FFT_INT8_SIZE; ++bin)
+        batch_major_reverse_index[bin] =
+            (uint16_t)reverse_bits((unsigned)bin, 10);
     uint64_t plan_end = nn_runtime_read_cycles();
     if (!plan_ok) {
         printf("FFT batched int8 RVV: FAIL (invalid plan)\n");
@@ -610,6 +1047,8 @@ int fft_batched_int8_testbench_run(void)
         (unsigned)plan.size);
     printf("twiddle plan cycles: "); print_u64_decimal(plan_cycles);
     printf("\n");
+    printf("\n===== INT8 BIN-MAJOR [bin][batch] =====\n");
+    printf("RVV lanes span batches; twiddle is scalar-broadcast.\n");
     int m2_ok = run_q7_variant(&plan, "m2 accumulator",
         fft_butterflies_q7_m2);
     int m2_fused_ok = run_q7_variant(&plan, "m2 accumulator stage-fused",
@@ -622,8 +1061,21 @@ int fft_batched_int8_testbench_run(void)
         fft_butterflies_rvv_q7);
     int m8_fused_ok = run_q7_variant(&plan, "m8 accumulator stage-fused",
         fft_butterflies_q7_m8_stage_fused);
+
+    printf("\n===== INT8 BATCH-MAJOR [batch][bin] =====\n");
+    printf("RVV lanes span bins within one FFT; twiddles are vectors.\n");
+    int batch_major_m2_ok = run_batch_major_q7_variant(
+        &plan, "m2 accumulator", fft_batch_major_q7_m2);
+    int batch_major_m4_ok = run_batch_major_q7_variant(
+        &plan, "m4 accumulator", fft_batch_major_q7_m4);
+    int batch_major_m8_ok = run_batch_major_q7_variant(
+        &plan, "m8 accumulator", fft_batch_major_q7_m8);
+
+    printf("\n===== INT8 MIXED-RADIX BIN-MAJOR [bin][batch] =====\n");
+    int mixed_ok = run_mixed_radix_q7_variant(&plan, &mixed_plan);
     int ok = m2_ok && m2_fused_ok && m4_ok && m4_fused_ok &&
-        m8_ok && m8_fused_ok;
+        m8_ok && batch_major_m2_ok && batch_major_m4_ok &&
+        batch_major_m8_ok && mixed_ok && m8_fused_ok;
     printf("FFT batched int8 RVV: %s (bit-exact Q7 validation)\n",
         ok ? "PASS" : "FAIL");
     fft_plan_destroy_q7(&plan);

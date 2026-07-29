@@ -1,5 +1,9 @@
 # RVV FFT testbench
 
+完整的 CPU、RVV、Gemmini，FP32/int8，bin-major/batch-major、VLEN/DLEN、
+LMUL/fusion 與倍數重算，請見
+[`FFT_COMPLETE_RECALCULATED_REPORT.md`](FFT_COMPLETE_RECALCULATED_REPORT.md)。
+
 This testbench implements a single-precision, radix-2 decimation-in-time FFT.
 Bit reversal is scalar; each stage uses FP32 LMUL=m4 RVV intrinsics to calculate
 groups of complex butterflies in parallel. Input and output complex numbers are
@@ -28,6 +32,9 @@ are excluded. Lower cycles and time are better.
 The complete discussion of memory rearrangement, VLEN, DLEN, precision, LMUL,
 register pressure, fusion, and Gemmini utilization is available in
 [FFT_ARCHITECTURE_ANALYSIS.md](FFT_ARCHITECTURE_ANALYSIS.md).
+The complete bin-major RVV m2/m4/m8 FPGA tables and batch-major CPU reference
+are consolidated in
+[RVV_LAYOUT_HARDWARE_RESULTS.md](RVV_LAYOUT_HARDWARE_RESULTS.md).
 
 CPU and RVV hardware run at 50 MHz. Gemmini hardware runs at 30 MHz, so
 wall-clock time, rather than raw cycles, is the fair cross-clock comparison:
@@ -79,6 +86,7 @@ not replace the current hardware table.
 | Gemmini Spike mapping | FFT cycles | Relative to 15,288,837-cycle baseline | Decision |
 | --- | ---: | ---: | --- |
 | Original WS, Gemmini twiddle + CPU Q7 | **15,288,837** | 1.00x | retained |
+| Dense mixed radix 4/16/16 WS | **6,787,804** | 2.26x faster in same-build A/B | retained as hardware-optimized experiment |
 | Transposed WS operands | 15,790,053 | 1.03x slower | reverted |
 | Stage-level large-buffer WS | 16,166,739 | 1.06x slower | reverted |
 | Stage-fused | 17,602,856 | 1.15x slower | not preferred |
@@ -91,6 +99,24 @@ butterfly matmul and another DMA/fence boundary. The current radix-2 mapping
 uses a sparse 16x16 block-diagonal twiddle matrix with only 32 nonzero
 coefficients, or 12.5% arithmetic density.
 
+### Cross-architecture mixed-radix Spike ablation
+
+These values use the same dense mixed-radix 4/16/16 definition, Q7
+coefficients, three scaling boundaries, 1,024 points, and 64 batches. They are
+Spike results and remain separate from the FPGA radix-2 comparison.
+
+| Architecture | Radix-2 comparison point | Mixed radix 4/16/16 | Effect of mixed radix |
+| --- | ---: | ---: | ---: |
+| Scalar CPU | 19,377,049 | 56,838,101 | 2.93x slower |
+| RVV, VLEN=512 | **322,759** (m4 fused) | 1,715,067 | 5.31x slower |
+| Gemmini WS | 15,337,062 | **6,787,804** | **2.26x faster** |
+
+For the same mixed-radix algorithm, RVV uses 3.96x fewer Spike cycles than
+Gemmini and 33.14x fewer than the scalar CPU. The ablation shows that dense
+radix-16 transforms improve Gemmini utilization, while RVV remains faster
+because its radix-2 mapping already exploits the batch dimension without
+performing dense direct-DFT MACs.
+
 ### Main conclusions
 
 - The fastest measured FP32 batch is RVV m4 stage fusion at 926,407 cycles
@@ -102,9 +128,13 @@ coefficients, or 12.5% arithmetic density.
   wall-clock time.
 - Fusion is architecture- and precision-dependent. It helps FP32 RVV but is
   slower for the measured INT8 CPU, RVV, and earlier Gemmini mappings.
-- These results show that the current sparse radix-2 mapping is inefficient on
-  Gemmini. They do not establish the performance of an unimplemented dense
-  radix-16 or four-step/matrix-FFT mapping.
+- These results show that the sparse radix-2 mapping is inefficient on
+  Gemmini. A separate dense mixed-radix 4/16/16 Spike experiment reduces the
+  same-build result from 15,337,062 to 6,787,804 cycles. It is not included in
+  the controlled radix-2 hardware table until it has been measured on FPGA.
+  It also uses three quantization boundaries instead of ten, so it is validated
+  against its own mixed-radix Q7 reference rather than claimed to be bit-exact
+  with the radix-2 Q7 output.
 
 Detailed measurements and methodology are in the
 [FP32 CPU](../fft_cpu/README.md),

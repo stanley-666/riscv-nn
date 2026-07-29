@@ -1,5 +1,9 @@
 # FFT Architecture Performance Analysis
 
+For the measured cycle and V512D128B disassembly evidence behind the LMUL,
+fusion, and spill conclusions, see
+[RVV FFT register-pressure analysis](RVV_REGISTER_PRESSURE_ANALYSIS.md).
+
 This document analyzes the existing radix-2 batched FFT on the scalar CPU,
 RISC-V Vector Extension (RVV), and Gemmini. It uses the same analysis axes as
 the convolution study:
@@ -81,6 +85,10 @@ measured INT8 implementation is RVV m4 without stage fusion.
 
 ## 3. Memory layout and rearrangement
 
+The bin-major RVV m2/m4/m8 FPGA measurements and batch-major scalar references
+are consolidated in
+[RVV_LAYOUT_HARDWARE_RESULTS.md](RVV_LAYOUT_HARDWARE_RESULTS.md).
+
 ### 3.1 Scalar CPU layout
 
 The scalar CPU uses a batch-major layout:
@@ -113,6 +121,15 @@ bin 1: batch 0 ... batch 63
 Bit reversal swaps complete batch rows. The layout conversion has an upfront
 cost, but the butterfly region benefits throughout all 10 stages. This mapping
 is the main reason radix-2 batched FFT aligns naturally with RVV.
+
+A VLEN=512 Spike ablation also implements RVV batch-major `[batch][bin]`.
+The best batch-major result is m8 at 4,919,856 cycles, while bin-major m4
+requires 386,632 cycles, a 12.72x advantage for bin-major. Batch-major
+butterflies are 13.21x slower because lanes cover offsets with different
+twiddles and early stages have short vectors. Its preindexed out-of-place bit
+reversal is 11.24x slower than swapping whole bin-major batch rows. All
+variants remain bit-exact, so this is a layout effect rather than a numerical
+difference.
 
 ### 3.3 Gemmini layout
 
@@ -339,10 +356,65 @@ Gemmini performs dense scheduling around a sparse FFT dependency graph.
 | Mapping | FFT cycles | Relative to original WS | Decision |
 | --- | ---: | ---: | --- |
 | Original WS, Gemmini twiddle + CPU Q7 | **15,288,837** | 1.00x | retained |
+| Dense mixed radix 4/16/16 WS | **6,787,804** | 2.26x faster in same-build A/B | retained separately |
 | Transposed WS operands | 15,790,053 | 1.03x slower | reverted |
 | Stage-level large-buffer WS | 16,166,739 | 1.06x slower | reverted |
 | Stage-fused | 17,602,856 | 1.15x slower | not preferred |
 | Gemmini-native scaling + butterfly matmul | 20,090,711 | 1.31x slower | experimental |
+
+The `transpose_A` WS mapping was also measured as a same-build A/B test.
+It kept the input in its existing physical layout, used Gemmini's transpose
+support, and pretransposed the twiddle weights:
+
+| Same-build WS variant | FFT cycles | Difference |
+| --- | ---: | ---: |
+| Baseline | **15,334,869** | reference |
+| Gemmini `transpose_A` + pretransposed weights | 15,336,071 | +1,202 (+0.008%) |
+
+Both variants produced 0 / 65,536 mismatches. Because the transposed variant
+was not faster, it was reverted rather than replacing the retained baseline.
+These same-build values should not be mixed with the earlier 15,288,837-cycle
+measurement when calculating speedup.
+
+The dense mixed-radix implementation uses the factorization
+$1024=4\times16\times16$. The execution order 4/16/16 minimizes the number of
+distinct dense transforms: one radix-4 transform, four radix-16 transforms,
+and 64 radix-16 transforms, for 69 Gemmini calls per FFT. Each call combines
+all applicable FFT blocks and all 64 batches. The real representation is an
+8x8 or 32x32 dense matrix rather than the radix-2 16x16 block-diagonal matrix.
+
+In the same build, the result was:
+
+| Variant | FFT cycles | Relative result |
+| --- | ---: | ---: |
+| Radix-2 WS baseline | 15,337,062 | reference |
+| Dense mixed radix 4/16/16 WS | **6,787,804** | **2.26x faster; 55.7% fewer cycles** |
+
+The accelerator output has 0 / 65,536 mismatches against an independent
+scalar mixed-radix Q7 reference. It is not bit-exact with the existing
+radix-2 Q7 reference because the mixed-radix algorithm rounds and scales at
+three stage boundaries instead of ten. Against the radix-2 output, 60,992 /
+65,536 complex points have both components within +/-1, the mean absolute
+component difference is 0.533, and the maximum component difference is 3.
+This result therefore belongs to a hardware-optimized algorithm comparison,
+not the controlled radix-2 comparison. FPGA timing is still required.
+
+The same mixed-radix definition was also implemented on the scalar CPU and
+RVV and simulated with Spike:
+
+| Architecture | Radix-2 comparison point | Mixed radix 4/16/16 | Radix change |
+| --- | ---: | ---: | ---: |
+| Scalar CPU | 19,377,049 | 56,838,101 | 2.93x slower |
+| RVV, VLEN=512 | **322,759** (m4 fused) | 1,715,067 | 5.31x slower |
+| Gemmini WS | 15,337,062 | **6,787,804** | **2.26x faster** |
+
+All three mixed-radix implementations match the shared scalar mixed-radix
+reference at all 65,536 complex points. For the same mixed-radix workload,
+RVV requires 3.96x fewer Spike cycles than Gemmini. The opposite effect of the
+radix change is architectural: direct dense transforms expose Gemmini's
+systolic array but add unnecessary MACs for the CPU and RVV. RVV radix-2
+already applies one twiddle scalar to a contiguous 64-batch vector and skips
+the zeros implicit in the stage matrix.
 
 Gemmini-native output scaling, saturation, and butterfly add/subtract were
 functionally validated against an independent RNE reference with
