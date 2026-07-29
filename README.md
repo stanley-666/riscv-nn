@@ -1023,6 +1023,21 @@ unroll-8, two-accumulator implementation:
 conv1d_fp32_vpu_im2col_unroll8_acc2_m8
 ```
 
+## Citation
+
+If you use this repository in research, publications, coursework, or derived
+projects, please cite Stanley Lee at National Taiwan Normal University (NTNU):
+
+```bibtex
+@software{lee_riscv_nn_2026,
+  author      = {Lee, Stanley},
+  title       = {RISC-V Inference},
+  year        = {2026},
+  institution = {National Taiwan Normal University},
+  url         = {https://github.com/stanley-666/riscv-nn}
+}
+```
+
 ## Acknowledgements
 
 This project is developed by MC2 Lab at National Taiwan Normal University.

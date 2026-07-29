@@ -447,7 +447,8 @@ DEFINE_Q7_BUTTERFLY(m4, vint8m1_t, vint16m2_t, vint32m4_t,
 
 #define DEFINE_Q7_BATCH_MAJOR_VARIANT(NAME, T8, T16, T32, SETVL, LOAD8, \
     WMUL16, SEXT32, SUB32, ADD32, NCLIP16, NCLIP8, VAADD8, VASUB8, STORE8) \
-static int fft_batch_major_q7_##NAME(const fft_plan_q7_t *plan) \
+static __attribute__((noinline)) int fft_batch_major_q7_##NAME( \
+    const fft_plan_q7_t *plan) \
 { \
     /* BATCH-MAJOR: process one FFT at a time and vectorize its bin offset. */ \
     for (size_t batch = 0; batch < plan->batch_count; ++batch) { \
@@ -626,7 +627,8 @@ static inline void butterfly_unity_batches_q7(int8_t *even_real,
     }
 }
 
-static int fft_butterflies_rvv_q7(const fft_plan_q7_t *plan)
+static __attribute__((noinline)) int fft_butterflies_rvv_q7(
+    const fft_plan_q7_t *plan)
 {
     size_t vl = __riscv_vsetvl_e8m2(plan->batch_count);
     if (vl == 0) return 0;
@@ -663,7 +665,8 @@ static int fft_butterflies_rvv_q7(const fft_plan_q7_t *plan)
 }
 
 #define DEFINE_Q7_FFT_VARIANT(NAME, SETVL) \
-static int fft_butterflies_q7_##NAME(const fft_plan_q7_t *plan) \
+static __attribute__((noinline)) int fft_butterflies_q7_##NAME( \
+    const fft_plan_q7_t *plan) \
 { \
     size_t full_vl = SETVL(plan->batch_count); \
     if (full_vl == 0) return 0; \
@@ -793,7 +796,7 @@ static inline void butterfly_two_stages_q7_##NAME( \
     STORE8(r2p, z2r, vl); STORE8(i2p, z2i, vl); \
     STORE8(r3p, z3r, vl); STORE8(i3p, z3i, vl); \
 } \
-static int fft_butterflies_q7_##NAME##_stage_fused( \
+static __attribute__((noinline)) int fft_butterflies_q7_##NAME##_stage_fused( \
     const fft_plan_q7_t *plan) \
 { \
     if ((plan->stage_count & 1u) != 0u) return 0; \
