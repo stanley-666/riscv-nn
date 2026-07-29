@@ -1,5 +1,12 @@
 # FFT Architecture Performance Analysis
 
+> **Current data status:** RVV batch-major is implemented, validated, and
+> measured on all nine GENV/LGVV FPGA configurations for both FP32 and Q7.
+> The canonical recalculation is
+> [FFT_COMPLETE_RECALCULATED_REPORT.md](FFT_COMPLETE_RECALCULATED_REPORT.md).
+> Older Spike-only layout rows below are ablations, not evidence that the
+> FPGA batch-major version is missing.
+
 For the measured cycle and V512D128B disassembly evidence behind the LMUL,
 fusion, and spill conclusions, see
 [RVV FFT register-pressure analysis](RVV_REGISTER_PRESSURE_ANALYSIS.md).
@@ -54,17 +61,17 @@ the 30 MHz Gemmini system.
 | Precision | Architecture | Configuration | FFT cycles | Time/64 FFTs | Time/FFT | Relative to matching CPU |
 | --- | --- | --- | ---: | ---: | ---: | ---: |
 | FP32 | Scalar CPU | baseline | 12,760,529 | 255.21 ms | 3.988 ms | 1.00x |
-| FP32 | RVV | `LGVV512D128` m8 baseline | **1,000,357** | **20.01 ms** | **0.313 ms** | **12.76x faster** |
+| FP32 | RVV | `LGVV512D128` bin-major m4 fused | **926,835** | **18.54 ms** | **0.290 ms** | **13.77x faster** |
 | FP32 | Gemmini | not implemented | — | — | — | — |
 | INT8/Q7 | Scalar CPU | baseline | 13,801,835 | 276.04 ms | 4.313 ms | 1.00x |
-| INT8/Q7 | RVV | `LGVV512D128` m4 baseline | **1,106,731** | **22.13 ms** | **0.346 ms** | **12.47x faster** |
+| INT8/Q7 | RVV | `LGVV512D128` bin-major m4 baseline | **1,074,399** | **21.49 ms** | **0.336 ms** | **12.85x faster** |
 | INT8/Q7 | Gemmini | current WS baseline | 19,073,443 | 635.78 ms | 9.934 ms | **2.30x slower** |
 
-For FP32, RVV reduces complete FFT latency by approximately 92.16% relative
-to the scalar CPU. For INT8/Q7, RVV reduces latency by approximately 91.98%.
+For FP32, RVV reduces complete FFT latency by approximately 92.74% relative
+to the scalar CPU. For INT8/Q7, RVV reduces latency by approximately 92.22%.
 
 The current INT8 Gemmini mapping is 2.30x slower than the scalar CPU and
-28.72x slower than RVV in wall-clock time. Even before accounting for its
+29.59x slower than RVV in wall-clock time. Even before accounting for its
 lower clock, Gemmini requires 1.38x as many cycles as the scalar CPU:
 
 $$
@@ -75,8 +82,8 @@ $$
 
 | Precision | Architecture | Variant | FFT cycles | Time/64 FFTs |
 | --- | --- | --- | ---: | ---: |
-| FP32 | RVV | `LGVV512D128` m4 stage-fused | **926,407** | **18.53 ms** |
-| INT8/Q7 | RVV | `LGVV512D128` m4 baseline | **1,106,731** | **22.13 ms** |
+| FP32 | RVV | `LGVV512D128` bin-major m4 stage-fused | **926,835** | **18.54 ms** |
+| INT8/Q7 | RVV | `LGVV512D128` bin-major m4 baseline | **1,074,399** | **21.49 ms** |
 | INT8/Q7 | Scalar CPU | baseline | 13,801,835 | 276.04 ms |
 | INT8/Q7 | Gemmini | baseline | 19,073,443 | 635.78 ms |
 
@@ -85,9 +92,11 @@ measured INT8 implementation is RVV m4 without stage fusion.
 
 ## 3. Memory layout and rearrangement
 
-The bin-major RVV m2/m4/m8 FPGA measurements and batch-major scalar references
-are consolidated in
-[RVV_LAYOUT_HARDWARE_RESULTS.md](RVV_LAYOUT_HARDWARE_RESULTS.md).
+Both RVV layouts are hardware implementations, not a bin-major hardware
+result compared with a scalar batch-major reference. All nine configurations
+run six bin-major baseline/fused variants and three batch-major variants.
+Complete tables are in the [FP32 README](../fft_batched/README.md) and
+[Q7 README](../fft_batched_int8/README.md).
 
 ### 3.1 Scalar CPU layout
 
@@ -103,7 +112,7 @@ parallelism.
 
 ### 3.2 RVV layout
 
-RVV uses a bin-major layout:
+The preferred RVV mapping uses a bin-major layout:
 
 $$
 [\mathrm{bin}][\mathrm{batch}].
@@ -122,14 +131,15 @@ Bit reversal swaps complete batch rows. The layout conversion has an upfront
 cost, but the butterfly region benefits throughout all 10 stages. This mapping
 is the main reason radix-2 batched FFT aligns naturally with RVV.
 
-A VLEN=512 Spike ablation also implements RVV batch-major `[batch][bin]`.
-The best batch-major result is m8 at 4,919,856 cycles, while bin-major m4
-requires 386,632 cycles, a 12.72x advantage for bin-major. Batch-major
-butterflies are 13.21x slower because lanes cover offsets with different
-twiddles and early stages have short vectors. Its preindexed out-of-place bit
-reversal is 11.24x slower than swapping whole bin-major batch rows. All
-variants remain bit-exact, so this is a layout effect rather than a numerical
-difference.
+RVV batch-major `[batch][bin]` is also implemented and has FPGA measurements
+for every configuration. The global best FP32 batch-major result is
+11,022,607 cycles versus 926,835 cycles for bin-major, an **11.89x** penalty.
+The global best Q7 batch-major result is 7,918,006 cycles versus 1,074,399
+cycles for bin-major, a **7.37x** penalty. Batch-major lanes cover consecutive
+bins with different twiddles, early stages expose short vectors, and bit
+reversal must be performed independently for every FFT. All variants pass
+validation, so this is a measured dataflow/layout effect rather than a
+missing implementation or numerical failure.
 
 ### 3.3 Gemmini layout
 
@@ -226,7 +236,7 @@ cycles for both precisions.
 | Architecture | FP32 baseline | INT8 baseline | INT8 relative to FP32 |
 | --- | ---: | ---: | ---: |
 | Scalar CPU | 12,760,529 | 13,801,835 | 1.08x slower |
-| RVV | 1,000,357 | 1,106,731 | 1.11x slower |
+| RVV | 987,952 | 1,074,399 | 1.09x slower |
 
 INT8 is not faster for this FFT. Unlike a dense INT8 convolution, the
 stage-scaled Q7 FFT requires:
@@ -315,9 +325,9 @@ groups can improve arithmetic coverage until register spills dominate.
 
 | Precision | Architecture | Baseline cycles | Fused cycles | Fusion result |
 | --- | --- | ---: | ---: | ---: |
-| FP32 | RVV, best-to-best | 1,000,357 | 926,407 | **1.08x faster** |
+| FP32 | RVV, best-to-best | 987,952 | 926,835 | **1.07x faster** |
 | INT8/Q7 | Scalar CPU | 13,801,835 | 13,940,562 | 1.01x slower |
-| INT8/Q7 | RVV, best-to-best | 1,106,731 | 1,185,280 | 1.07x slower |
+| INT8/Q7 | RVV, best-to-best | 1,074,399 | 1,162,509 | 1.08x slower |
 | INT8/Q7 | Gemmini hardware | 19,073,443 | pending | rerun required |
 
 Fusion removes intermediate stage memory traffic, but it also increases:

@@ -112,6 +112,62 @@ lanes use different twiddles. Bin-major applies one shared twiddle to all 64
 batches and uses scalar-vector operations. Therefore layout and register
 pressure contribute simultaneously.
 
+### FP32 batch-major: why m2 can win
+
+The FP32 batch-major source makes substantially more vector values live than
+the bin-major scalar-twiddle path. One inner iteration names:
+
+```text
+xr xi wr wi pr pi ar ai ur lr ui li
+```
+
+The compiler can reuse registers after the final use of an input, so these
+twelve names are not necessarily live simultaneously. Nevertheless, four
+input/twiddle vectors, two products, the even input, and output temporaries
+overlap around the complex multiply and butterfly:
+
+| LMUL | Maximum groups | Batch-major scheduling consequence |
+| ---: | ---: | --- |
+| m2 | 16 | Enough room for inputs, twiddles, products, and outputs with useful overlap |
+| m4 | 8 | Borderline; the compiler must shorten live ranges and serialize more loads/operations |
+| m8 | 4 | Cannot retain the working set; aggressive serialization or spill/reload is unavoidable |
+
+LGVV512D128 illustrates the capacity cliff:
+
+| FP32 batch-major variant | Bit reversal | Butterfly | Complete FFT | Relative butterfly |
+| --- | ---: | ---: | ---: | ---: |
+| m2 | 3,995,076 | **7,027,531** | **11,022,607** | 1.00x |
+| m4 | 4,523,114 | 7,086,306 | 11,609,420 | 1.008x |
+| m8 | 4,015,303 | 16,912,003 | 20,927,306 | 2.406x |
+
+Two qualifications are important:
+
+1. The m2 and m4 butterfly regions differ by only 0.84%. This is a near tie,
+   not evidence that m2 has intrinsically higher arithmetic throughput.
+   m2 has more scheduling freedom, while m4 executes fewer chunks; those
+   effects almost cancel.
+2. The bit-reversal implementation does not use the selected butterfly LMUL.
+   Its 3,995,076 versus 4,523,114-cycle difference is run-to-run/cache
+   variation and must not be presented as an m2 register-pressure benefit.
+   The LMUL conclusion should therefore be based on butterfly cycles.
+
+m8 is different: its butterfly region is 2.41x slower, which is far beyond
+the m2/m4 measurement spread and is consistent with only four architectural
+groups being available for a vector-vector complex multiply. A current FP32
+batch-major ELF was not retained in the workspace, so this report does not
+claim a specific `vs8r.v` count for that function. The Q7 m8 spill count above
+is direct disassembly evidence; the FP32 m8 conclusion is a source-level
+register-capacity analysis supported by FPGA cycles.
+
+Across all FP32 configurations, m2 is often the best *complete* batch-major
+variant, while m4 can still have the best butterfly counter on some
+configurations. The defensible conclusion is therefore:
+
+- m2/m4 is the useful operating region;
+- m2 has lower register pressure;
+- m4 can recover the difference through a larger VLMAX;
+- m8 crosses a clear pressure/utilization cliff.
+
 ## Cycle results explained by pressure
 
 ### FP32 bin-major FPGA result
@@ -155,17 +211,21 @@ two-stage fusion. Unlike FP32, fusion does not win at any accumulator LMUL on
 this FPGA. The best balance is m4: it reduces loop/chunk overhead without
 shrinking the usable register-group count to four.
 
-### Layout ablation on Spike
+### Layout ablation and FPGA campaign
 
-The layout experiment has Spike results for both layouts. LGVV512D128 now also
-has a corresponding FPGA measurement: its best batch-major radix-2 FFT takes
-7,918,006 cycles versus 1,074,399 cycles for the best bin-major radix-2 FFT,
-a `7.37x` batch-major penalty.
+Both layouts have Spike ablations and complete FPGA measurements. All nine
+FPGA configurations now run bin-major and batch-major kernels in both
+precisions. On LGVV512D128, the best Q7 batch-major radix-2 FFT takes
+7,918,006 cycles versus 1,074,399 cycles for bin-major, a `7.37x` penalty.
+The corresponding FP32 values are 11,022,607 and 926,835 cycles, an `11.89x`
+penalty.
 
-| Precision | Spike VLEN | Best bin-major FFT cycles | Best batch-major FFT cycles | Batch-major penalty |
-| --- | ---: | ---: | ---: | ---: |
-| FP32 | 128 | 579,302, m8 | 7,909,267, m4 | 13.65x |
-| Q7 | 512 | 386,632, m4 | 4,919,856, m8 | 12.72x |
+| Environment | Precision | Best bin-major FFT cycles | Best batch-major FFT cycles | Batch-major penalty |
+| --- | --- | ---: | ---: | ---: |
+| FPGA LGVV512D128 | FP32 | 926,835, m4 fused | 11,022,607, m2 | 11.89x |
+| FPGA LGVV512D128 | Q7 | 1,074,399, m4 | 7,918,006, m4 | 7.37x |
+| Spike VLEN=128 | FP32 | 579,302, m8 | 7,909,267, m4 | 13.65x |
+| Spike VLEN=512 | Q7 | 386,632, m4 | 4,919,856, m8 | 12.72x |
 
 Batch-major loses for three separable reasons:
 
@@ -173,11 +233,12 @@ Batch-major loses for three separable reasons:
    one contiguous 64-batch row.
 2. Twiddles become vectors instead of one scalar broadcast across batches.
 3. Larger LMUL increases live-group pressure; Q7 batch-major m8 demonstrably
-   spills, while FP32 batch-major is fastest at m4 rather than m8.
+   spills, while FP32 m8 shows a large cycle cliff. FP32 m2 and m4 remain
+   close in butterfly cycles, with m2 often winning the complete FFT.
 
-These rows compare layouts within each precision, not FP32 against Q7, because
-their Spike VLEN settings differ. The Q7 Spike result selecting m8 does not
-contradict the spill evidence:
+Each row compares layouts within one environment and precision, not FP32
+against Q7. The Q7 Spike result selecting m8 does not contradict the FPGA
+spill evidence:
 instruction/chunk reduction can outweigh a small simulated spill penalty.
 The FP32 FPGA fused-m8 result shows why the same choice can become disastrous
 when real spill traffic reaches the memory system.

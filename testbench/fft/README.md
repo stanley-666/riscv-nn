@@ -29,12 +29,13 @@ measurements. Unless noted otherwise, every row processes 64 independent
 butterfly stages. Input layout, validation, and one-time twiddle-plan creation
 are excluded. Lower cycles and time are better.
 
-The complete discussion of memory rearrangement, VLEN, DLEN, precision, LMUL,
-register pressure, fusion, and Gemmini utilization is available in
-[FFT_ARCHITECTURE_ANALYSIS.md](FFT_ARCHITECTURE_ANALYSIS.md).
-The complete bin-major RVV m2/m4/m8 FPGA tables and batch-major CPU reference
-are consolidated in
-[RVV_LAYOUT_HARDWARE_RESULTS.md](RVV_LAYOUT_HARDWARE_RESULTS.md).
+The current complete discussion of memory rearrangement, VLEN, DLEN,
+precision, LMUL, register pressure, fusion, and Gemmini utilization is in
+[FFT_COMPLETE_RECALCULATED_REPORT.md](FFT_COMPLETE_RECALCULATED_REPORT.md).
+Both bin-major `[bin][batch]` and batch-major `[batch][bin]` are implemented
+as RVV kernels and measured on all nine FPGA configurations. Complete tables
+are in the [FP32 RVV README](../fft_batched/README.md) and
+[Q7 RVV README](../fft_batched_int8/README.md).
 
 CPU and RVV hardware run at 50 MHz. Gemmini hardware runs at 30 MHz, so
 wall-clock time, rather than raw cycles, is the fair cross-clock comparison:
@@ -48,14 +49,12 @@ $$
 | Precision | Architecture | Variant/configuration | Clock | FFT cycles | Time for 64 FFTs | Time/FFT | Relative to matching CPU |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
 | FP32 | Scalar CPU | baseline | 50 MHz | 12,760,529 | 255.21 ms | 3.988 ms | 1.00x |
-| FP32 | RVV | baseline, `LGVV512D128` m8 | 50 MHz | 1,000,357 | 20.01 ms | 0.313 ms | **12.76x faster** |
-| FP32 | RVV | stage-fused, `LGVV512D128` m4 | 50 MHz | **926,407** | **18.53 ms** | **0.290 ms** | 13.77x faster than CPU baseline |
+| FP32 | RVV | bin-major m4 fused, `LGVV512D128` | 50 MHz | **926,835** | **18.54 ms** | **0.290 ms** | **13.77x faster** |
 | FP32 | Scalar CPU | stage-fused | — | pending | pending | pending | — |
 | FP32 | Gemmini | baseline/stage-fused | — | not implemented | — | — | — |
 | INT8/Q7 | Scalar CPU | baseline | 50 MHz | 13,801,835 | 276.04 ms | 4.313 ms | 1.00x |
 | INT8/Q7 | Scalar CPU | stage-fused | 50 MHz | 13,940,562 | 278.81 ms | 4.356 ms | 1.01x slower than CPU baseline |
-| INT8/Q7 | RVV | baseline, `LGVV512D128` m4 | 50 MHz | **1,106,731** | **22.13 ms** | **0.346 ms** | **12.47x faster** |
-| INT8/Q7 | RVV | stage-fused, `GENV512D128` m4 | 50 MHz | 1,185,280 | 23.71 ms | 0.370 ms | **11.76x faster than fused CPU** |
+| INT8/Q7 | RVV | bin-major m4 baseline, `LGVV512D128` | 50 MHz | **1,074,399** | **21.49 ms** | **0.336 ms** | **12.85x faster** |
 | INT8/Q7 | Gemmini | current baseline | 30 MHz | 19,073,443 | 635.78 ms | 9.934 ms | **2.30x slower** |
 | INT8/Q7 | Gemmini | current stage-fused/native scaling | 30 MHz | pending | pending | pending | — |
 
@@ -67,15 +66,15 @@ tolerance or bit-exact INT8 validation.
 
 | Precision | Architecture | Baseline cycles | Fused cycles | Fusion effect |
 | --- | --- | ---: | ---: | ---: |
-| FP32 | RVV | 1,000,357 | 926,407 | **7.39% lower latency, 1.08x faster** |
+| FP32 | RVV, best-to-best | 987,952 | 926,835 | **6.19% lower latency, 1.07x faster** |
 | INT8/Q7 | Scalar CPU | 13,801,835 | 13,940,562 | 1.01% higher latency, 1.01x slower |
-| INT8/Q7 | RVV | 1,106,731 | 1,185,280 | 7.10% higher latency, 1.07x slower |
+| INT8/Q7 | RVV, best-to-best | 1,074,399 | 1,162,509 | 8.20% higher latency, 1.08x slower |
 | INT8/Q7 | Gemmini | 19,073,443 | pending | rerun required |
 
-The RVV INT8 baseline and fused rows use the fastest measured configuration
-for each variant. If configuration must be held fixed, `LGVV512D128` m4 fused
-uses 1,185,495 cycles, only 215 cycles above the listed
-`GENV512D128` result.
+The RVV rows use the fastest complete bin-major FFT for each fusion class.
+Batch-major is not pending: its fastest FP32 and Q7 results are 11,022,607
+and 7,918,006 cycles. They are not architecture-best rows because they are
+11.89x and 7.37x slower than the matching best bin-major kernels.
 
 ### Gemmini optimization experiments
 
@@ -119,12 +118,14 @@ performing dense direct-DFT MACs.
 
 ### Main conclusions
 
-- The fastest measured FP32 batch is RVV m4 stage fusion at 926,407 cycles
-  (18.53 ms).
-- The fastest measured INT8/Q7 batch is RVV m4 baseline at 1,106,731 cycles
-  (22.13 ms).
+- The fastest measured FP32 batch is RVV bin-major m4 stage fusion at
+  926,835 cycles (18.54 ms).
+- The fastest measured INT8/Q7 batch is RVV bin-major m4 baseline at
+  1,074,399 cycles (21.49 ms).
+- Batch-major is implemented and validated on all nine FPGA configurations.
+  Its best FP32 and Q7 results are 11,022,607 and 7,918,006 cycles.
 - The current Gemmini INT8 baseline takes 635.78 ms: it is 2.30x slower than
-  the 50 MHz scalar CPU and 28.72x slower than the best INT8 RVV result in
+  the 50 MHz scalar CPU and 29.59x slower than the best INT8 RVV result in
   wall-clock time.
 - Fusion is architecture- and precision-dependent. It helps FP32 RVV but is
   slower for the measured INT8 CPU, RVV, and earlier Gemmini mappings.
