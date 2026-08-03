@@ -5,6 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef BAREMETAL_CPU_HZ
+#define BAREMETAL_CPU_HZ 50000000UL
+#endif
+
 void *safe_malloc(size_t size)
 {
     void *ptr = malloc(size);
@@ -41,6 +45,16 @@ uint64_t nn_runtime_read_cycles(void)
     uint64_t cycles;
     __asm__ volatile("rdcycle %0" : "=r"(cycles) :: "memory");
     return cycles;
+}
+
+uint64_t nn_runtime_cycle_frequency_hz(void)
+{
+    return BAREMETAL_CPU_HZ;
+}
+
+double nn_runtime_cycles_to_seconds(uint64_t cycles)
+{
+    return (double)cycles / (double)nn_runtime_cycle_frequency_hz();
 }
 
 /*

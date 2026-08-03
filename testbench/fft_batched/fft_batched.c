@@ -1064,9 +1064,7 @@ int fft_batched_testbench_run(void)
     return 0;
 }
 
-#ifndef BAREMETAL
 int main(void)
 {
     return fft_batched_testbench_run();
 }
-#endif

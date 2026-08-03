@@ -1,5 +1,14 @@
 # Batched RVV FFT testbench
 
+Linux/Spike and bare-metal compile the same
+`testbench/fft_batched/fft_batched.c` source and execute the same `main()`.
+Bare-metal replaces only startup, linking, minilib, and the `nn_runtime`
+implementation; there is no separate application adapter.
+The bare-metal startup prints hardware and RVV/VLEN information before entering
+this shared `main()`.
+Extension results are diagnostic only; missing or unknown entries are reported
+and execution continues.
+
 This testbench runs 64 independent 1024-point FP32 radix-2 FFTs. Every batch
 uses the same input and NumPy ground truth as `testbench/fft`.
 

@@ -357,9 +357,7 @@ int fft_testbench_run(void)
     return 0;
 }
 
-#ifndef BAREMETAL
 int main(void)
 {
     return fft_testbench_run();
 }
-#endif

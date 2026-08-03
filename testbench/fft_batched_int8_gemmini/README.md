@@ -1,5 +1,14 @@
 # Batched scaled INT8 FFT on Gemmini
 
+Linux/Spike and bare-metal compile the same
+`testbench/fft_batched_int8_gemmini/fft_batched_int8_gemmini.c` source and
+execute the same `main()`. Bare-metal replaces only startup, linking, minilib,
+and platform runtime support; there is no separate application adapter.
+The bare-metal startup prints hardware information before entering this shared
+`main()`.
+Extension results are diagnostic only; missing or unknown entries are reported
+and execution continues.
+
 This testbench evaluates the same 1,024-point, 64-batch, stage-scaled Q7 FFT
 used by `fft_cpu_int8` and `fft_batched_int8`.
 

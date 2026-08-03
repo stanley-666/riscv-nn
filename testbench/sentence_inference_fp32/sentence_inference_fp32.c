@@ -1,9 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
 #include <string.h>
 
 #include "nn_layer.h"
+#include "nn_runtime.h"
 #include "nn_utils.h"
 #if NN_BACKEND_CPU
 #include "nn_infer_cpu.h"
@@ -26,12 +26,6 @@
 static float buffer1_static[SENTENCE_FP32_MAX_ELEMS] __attribute__((aligned(64)));
 static float buffer2_static[SENTENCE_FP32_MAX_ELEMS] __attribute__((aligned(64)));
 
-uint64_t read_rdcycle() {
-    uint64_t cycle;
-    __asm__ volatile ("rdcycle %0" : "=r" (cycle));
-    return cycle;
-}
-
 void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
     (void)num_elem;
     (void)dtype;
@@ -48,19 +42,19 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         printf("Initializing ping-pong buffers...\n");
         init_pingpong_buffer(SENTENCE_FP32_MAX_ELEMS, ELEM_FLOAT32);
         printf("Defining layers...\n");
-        clock_t layer_def_start = clock();
+        uint64_t layer_def_start = nn_runtime_read_cycles();
         SentenceFp32Layers layers = sentence_fp32_define_layers();
-        clock_t layer_def_end = clock();
-        double layer_def_elapsed = (double)(layer_def_end - layer_def_start) / CLOCKS_PER_SEC;
+        uint64_t layer_def_end = nn_runtime_read_cycles();
+        double layer_def_elapsed = nn_runtime_cycles_to_seconds(layer_def_end - layer_def_start);
         printf("Layer definition time: %.6f seconds\n", layer_def_elapsed);
         printf("Creating CNN model...\n");
         CNN *model;
 
         printf("Adding layers to the model...\n");
-        clock_t add_layer_start = clock();
+        uint64_t add_layer_start = nn_runtime_read_cycles();
         model = sentence_fp32_connect_layers(&layers);
-        clock_t add_layer_end = clock();
-        double add_layer_elapsed = (double)(add_layer_end - add_layer_start) / CLOCKS_PER_SEC;
+        uint64_t add_layer_end = nn_runtime_read_cycles();
+        double add_layer_elapsed = nn_runtime_cycles_to_seconds(add_layer_end - add_layer_start);
         printf("Layer addition time: %.6f seconds\n", add_layer_elapsed);
 
         float embedding_f32[384];
@@ -68,12 +62,10 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
             embedding_f32[i] = (float)random_embedding[i];
         forward_input_bytes = 384 * sizeof(float);
 
-        clock_t start_time = clock();
         NNInferenceProfile profile;
-        uint64_t start_cycle = read_rdcycle();
+        uint64_t start_cycle = nn_runtime_read_cycles();
         RUN_FORWARD(model, (void *)embedding_f32);
-        uint64_t total_cycles = read_rdcycle() - start_cycle;
-        clock_t end_time = clock();
+        uint64_t total_cycles = nn_runtime_read_cycles() - start_cycle;
 #if NN_BACKEND_VECTOR
         forward_fp32_vpu_profile(model, (void *)embedding_f32, &profile);
 #else
@@ -91,7 +83,7 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         float approximation_error = fabsf(probability - reference_probability);
         layers.fc2->activation = SIGMOID;
 #endif
-        double elapsed_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
+        double elapsed_time = nn_runtime_cycles_to_seconds(total_cycles);
         for (int i = 0; i < profile.num_layers; ++i) {
             printf("Layer %d (%s): %lu cycles\n", i,
                    layer_type_name(profile.layers[i].type),
@@ -147,9 +139,9 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
             for (int j = 0; j < 384; ++j)
                 embedding_f32[j] = (float)embedding[j];
 
-            clock_t start_time = clock();
+            uint64_t start_time = nn_runtime_read_cycles();
             RUN_FORWARD(model, (void*)embedding_f32);
-            clock_t end_time = clock();
+            uint64_t end_time = nn_runtime_read_cycles();
             elapsed_time += (double)(end_time - start_time);
             // Six layers: conv1, conv2, conv3, maxpool, fc1, fc2.
             float *output = (float *)((model->numModules % 2 == 0) ? buffer1 : buffer2);
@@ -169,7 +161,7 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
             }
         }
 
-        elapsed_time /= CLOCKS_PER_SEC;
+        elapsed_time /= (double)nn_runtime_cycle_frequency_hz();
         printf("Inference time: %.6f seconds\n", elapsed_time);
         printf("Overall accuracy: %.2f%% (%d/%d correct)\n", (double)correct / NUM_SAMPLES * 100.0, correct, NUM_SAMPLES);
         freeCNN(model);

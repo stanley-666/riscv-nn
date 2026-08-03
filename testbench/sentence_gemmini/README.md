@@ -10,6 +10,14 @@ configuration. The same inference source is compiled in two environments:
 - freestanding bare-metal with the repository startup, linker, minilib,
   syscalls, and trap runtime.
 
+Both targets compile `testbench/sentence_gemmini/sentence_gemmini.c` and
+execute the same `main()`. Bare-metal replaces the platform runtime and link
+environment; there is no separate application adapter.
+The bare-metal startup prints hardware information before entering this shared
+`main()`.
+Extension results are diagnostic only; missing or unknown entries are reported
+and execution continues.
+
 The executable entry is `sentence_gemmini.c`. Gemmini ISA and tiling headers
 remain under `csrc/backends/riscv/gemmini/ops/`, while the generated input and
 weight headers are under its `bareMetalC/` data directory.
@@ -51,6 +59,23 @@ source ~/chipyard_1.13.0/chipyard/env.sh
     build/cmake/baremetal-sentence_gemmini-gemmini-GEMMINI \
     --target baremetal-dump
 ```
+
+Flash it to an SD card:
+
+```sh
+lsblk
+
+make baremetal-flash \
+    TESTBENCH=sentence_gemmini \
+    BACKEND=gemmini \
+    HARDWARE_CONFIG=GEMMINI \
+    SDCARD_DEVICE=/dev/sdX \
+    FLASH_CONFIRM=YES
+```
+
+Replace `/dev/sdX` with the whole, unmounted SD-card device. The flash target
+rejects partitions and mounted devices, then writes the binary beginning at
+512-byte block 34. This operation overwrites data on the selected device.
 
 Bare-metal artifacts are written to
 `build/baremetal/sentence_gemmini/` as

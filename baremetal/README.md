@@ -33,13 +33,36 @@ baremetal/
 ├── syscalls.c                  # Platform syscall stubs
 ├── trap.c                      # Trap reporting
 ├── nn_runtime_baremetal.c      # Shared nn_runtime API implementation
-├── include/                    # Platform and device definitions
-└── apps/sentence_fp32/         # Default bare-metal benchmark adapter
+└── include/                    # Platform and device definitions
 ```
 
-The default sentence benchmark reuses weights and input data from
-`testbench/sentence_inference_fp32/`; it does not keep a second copy of the
-model data.
+Bare-metal targets compile the same source file and `main()` used by the
+Linux/Spike target under `testbench/`. Only startup, linking, allocation,
+console output, and other runtime services are replaced.
+
+Before entering the shared testbench `main()`, `start.S` calls
+`baremetal_print_hardware_info()`. Every image therefore prints the testbench
+name, build profile, configured CPU clock, machine identification CSRs, XLEN/FLEN,
+and—for a vector-ISA build running on hardware that advertises RVV—its VLEN at
+the top of the UART log. Pure CPU builds do not access the V-only `vlenb` CSR;
+unavailable optional fields are omitted.
+
+Both the raw `misa` value and a canonical instruction-extension string such as
+`rv64imafdcbv` are printed. Privilege modes (`m/s/u`) and hypervisor support
+are reported separately to avoid confusing them with instruction extensions.
+When `misa.B=1`, the banner identifies the complete `Zba/Zbb/Zbs` B bundle.
+When it is zero, individual `Zb*` support remains unknown until representative
+instructions are probed; `Zvbb` likewise requires its own vector-instruction
+probe.
+The displayed build profile (for example, `V128D128B`) and configured CPU
+clock come from build arguments; they are not claimed as runtime-detected
+hardware values. Trap-only state is not included in this startup banner: if a
+fault occurs, `trap_handler` reports `mcause`, `mepc`, `mstatus`, and `mtval`
+at the point of failure.
+
+Extension reporting is diagnostic only. Missing, unadvertised, or
+probe-required extensions are printed as such, but startup always continues
+into the shared testbench `main()`; the banner never rejects an image.
 
 ## Building
 
@@ -77,21 +100,13 @@ Build products are written below a testbench-specific directory, for example
 
 ## Adding a Bare-Metal Benchmark
 
-Create an application directory containing its model builder, task adapter,
-and demo entry points. Model data can remain in an existing testbench
-directory. Register the testbench-to-adapter mapping in `baremetal/Makefile`.
-It can then use the same root-level interface:
+Keep the complete benchmark, including `main()`, in its existing `testbench/`
+directory. Use `nn_runtime.h` for allocation and cycle timing, then register
+the testbench source path in `cmake/Baremetal.cmake` and
+`baremetal/Makefile`. No second application or task adapter is needed.
 
 ```sh
 make -f makefile baremetal TESTBENCH=your_testbench
-```
-
-For development, custom paths can still be passed directly to the sub-make:
-
-```sh
-make -C baremetal vector \
-  APP_DIR=/absolute/path/to/app \
-  MODEL_DATA_DIR=/absolute/path/to/model/data
 ```
 
 Application code should call `safe_malloc`, `safe_calloc`, and `safe_free`

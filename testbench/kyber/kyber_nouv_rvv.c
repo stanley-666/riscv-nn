@@ -163,10 +163,8 @@ void kyber_nouv_run(void)
     freeCNN(model);
 }
 
-#ifndef BAREMETAL
 int main(void)
 {
     kyber_nouv_run();
     return 0;
 }
-#endif

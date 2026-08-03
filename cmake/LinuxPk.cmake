@@ -125,6 +125,7 @@ target_include_directories(${NN_TESTBENCH} PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/testbench/sentence_inference_fp32"
   "${CMAKE_CURRENT_SOURCE_DIR}/testbench/sentence_inference_int8")
 target_compile_definitions(${NN_TESTBENCH} PRIVATE ${NN_BACKEND_DEFINES})
+target_compile_definitions(${NN_TESTBENCH} PRIVATE NN_RUNTIME_CPU_HZ=1000000000UL)
 target_compile_options(${NN_TESTBENCH} PRIVATE -O3 -Wall -Wextra -march=${NN_ARCH} -mabi=lp64d)
 if(NN_TUNE)
   target_compile_options(${NN_TESTBENCH} PRIVATE -mtune=${NN_TUNE})

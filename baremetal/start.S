@@ -10,6 +10,7 @@
 .extern _stack_top
 .extern main
 .extern trap_handler
+.extern baremetal_print_hardware_info
 
 _start:
     la sp, _stack_top
@@ -61,6 +62,9 @@ _start:
     addi t0, t0, 8
     j 3b
 4:
+    # Platform-only banner. The testbench main remains identical to the
+    # Linux/Spike entry point and begins immediately after this call.
+    call baremetal_print_hardware_info
     call main
 5:
     wfi

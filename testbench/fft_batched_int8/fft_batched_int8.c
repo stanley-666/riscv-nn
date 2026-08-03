@@ -1082,9 +1082,7 @@ int fft_batched_int8_testbench_run(void)
     return ok ? 0 : 1;
 }
 
-#ifndef BAREMETAL
 int main(void)
 {
     return fft_batched_int8_testbench_run();
 }
-#endif

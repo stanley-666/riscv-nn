@@ -1,10 +1,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
-#include <time.h>
 #include <string.h>
 
 #include "nn_layer.h"
+#include "nn_runtime.h"
 #include "nn_utils.h"
 #if NN_BACKEND_CPU
 #include "nn_infer_cpu.h"
@@ -24,12 +24,6 @@
 #define SENTENCE_INT8_MAX_ELEMS (384 * 256)  // max tensor elements across the model
 static int8_t buffer1_static[SENTENCE_INT8_MAX_ELEMS] __attribute__((aligned(64)));
 static int8_t buffer2_static[SENTENCE_INT8_MAX_ELEMS] __attribute__((aligned(64)));
-uint64_t read_rdcycle() {
-    uint64_t cycle;
-    __asm__ volatile ("rdcycle %0" : "=r" (cycle));
-    return cycle;
-}
-
 void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
     (void)num_elem;
     (void)dtype;
@@ -47,38 +41,38 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         printf("Initializing ping-pong buffers...\n");
         init_pingpong_buffer(SENTENCE_INT8_MAX_ELEMS, ELEM_INT8);
         printf("Defining layers...\n");
-        clock_t layer_def_start = clock();
+        uint64_t layer_def_start = nn_runtime_read_cycles();
         NNModule *conv1 = nn_Conv1d(1, 384, 5, 64, 1, 2, RELU, conv1_weight, conv1_bias, conv1_M, conv1_zero_points, ELEM_INT8);
         NNModule *conv2 = nn_Conv1d(64, conv1->outputShape.W, 5, 128, 1, 2, RELU, conv2_weight, conv2_bias, conv2_M, conv2_zero_points, ELEM_INT8);
         NNModule *conv3 = nn_Conv1d(128, conv2->outputShape.W, 3, 256, 1, 1, RELU, conv3_weight, conv3_bias, conv3_M, conv3_zero_points, ELEM_INT8);
         NNModule *maxpool = nn_AdaptiveMaxPool1d(conv3->outputShape.C, conv3->outputShape.W, 1, ELEM_INT8);
         NNModule *fc1 = nn_Linear(maxpool->outputShape.C * maxpool->outputShape.W, 128, RELU, fc1_weight, fc1_bias, fc1_M, fc1_zero_points, ELEM_INT8);
         NNModule *fc2 = nn_Linear(128, 1, NONE, fc2_weight, fc2_bias, fc2_M, fc2_zero_points, ELEM_INT8);
-        clock_t layer_def_end = clock();
-        double layer_def_elapsed = (double)(layer_def_end - layer_def_start) / CLOCKS_PER_SEC;
+        uint64_t layer_def_end = nn_runtime_read_cycles();
+        double layer_def_elapsed = nn_runtime_cycles_to_seconds(layer_def_end - layer_def_start);
         printf("Layer definition time: %.6f seconds\n", layer_def_elapsed);
         printf("Creating CNN model...\n");
         CNN* model = createCNN();
 
         printf("Adding layers to the model...\n");
-        clock_t add_layer_start = clock();
+        uint64_t add_layer_start = nn_runtime_read_cycles();
         addLayer(model, conv1);
         addLayer(model, conv2);
         addLayer(model, conv3);
         addLayer(model, maxpool);
         addLayer(model, fc1);
         addLayer(model, fc2);
-        clock_t add_layer_end = clock();
-        double add_layer_elapsed = (double)(add_layer_end - add_layer_start) / CLOCKS_PER_SEC;
+        uint64_t add_layer_end = nn_runtime_read_cycles();
+        double add_layer_elapsed = nn_runtime_cycles_to_seconds(add_layer_end - add_layer_start);
         printf("Layer addition time: %.6f seconds\n", add_layer_elapsed);
         /* input data */
         int8_t *embedding = (int8_t*)random_embedding;
         forward_input_bytes = 384 * sizeof(int8_t);
         // inference
-        clock_t start_time = clock();
+        uint64_t start_time = nn_runtime_read_cycles();
         forward(model, embedding);
-        clock_t end_time = clock();
-        double elapsed_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
+        uint64_t end_time = nn_runtime_read_cycles();
+        double elapsed_time = nn_runtime_cycles_to_seconds(end_time - start_time);
         printf("Inference time: %.6f seconds\n", elapsed_time);
 
         // print output
@@ -125,7 +119,7 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
 
         int correct = 0 ;
         forward_input_bytes = 384 * sizeof(int8_t);
-        clock_t start_time = clock();
+        uint64_t start_time = nn_runtime_read_cycles();
         for (int i = 0; i < NUM_SAMPLES; i++) {
             const int8_t *embedding = test_embeddings[i];
             bool label = test_labels[i];
@@ -147,8 +141,8 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
             }
         }
 
-        clock_t end_time = clock();
-        double elapsed_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
+        uint64_t end_time = nn_runtime_read_cycles();
+        double elapsed_time = nn_runtime_cycles_to_seconds(end_time - start_time);
         printf("Inference time: %.6f seconds\n", elapsed_time);
         printf("Overall accuracy: %.2f%% (%d/%d correct)\n", (double)correct / NUM_SAMPLES * 100.0, correct, NUM_SAMPLES);
         freeCNN(model);
@@ -181,11 +175,9 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         int correct = 0 ;
         const int8_t *embedding = random_embedding;
         bool label = valid_embedding;
-        clock_t start_time = clock();
-        uint64_t start_cycle = read_rdcycle();
+        uint64_t start_cycle = nn_runtime_read_cycles();
         forward_int8_vpu(model, (void *)embedding);
-        uint64_t end_cycle = read_rdcycle();
-        clock_t end_time = clock();
+        uint64_t end_cycle = nn_runtime_read_cycles();
         const int8_t *output = (int8_t *)((model->numModules % 2 == 0) ? buffer1 : buffer2);
         printf("Model prediction (output[0]): %d\n", output[0]);
         if (output[0] == label) {
@@ -196,9 +188,8 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         }
 
         uint64_t cycle_diff = end_cycle - start_cycle;
-        double elapsed_time = (double)(end_time - start_time);
+        double elapsed_time = nn_runtime_cycles_to_seconds(cycle_diff);
         printf("Inference cycles: %lu cycles\n", cycle_diff);
-        elapsed_time = elapsed_time / CLOCKS_PER_SEC;
         printf("Inference time: %.6f seconds\n", elapsed_time);
         freeCNN(model);
     }
@@ -229,9 +220,9 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         for (int i = 0; i < NUM_SAMPLES; i++) {
             const int8_t *embedding = test_embeddings[i];
             bool label = test_labels[i];
-            clock_t start_time = clock();
+            uint64_t start_time = nn_runtime_read_cycles();
             forward_int8_vpu(model, (void *)embedding);
-            clock_t end_time = clock();
+            uint64_t end_time = nn_runtime_read_cycles();
             elapsed_time += (double)(end_time - start_time);
             const int8_t *output = (int8_t *)((model->numModules % 2 == 0) ? buffer1 : buffer2);
             printf("Output[%d]: %d, Label: %d\n", i, output[0], label);
@@ -248,7 +239,7 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
             }
         }
 
-        elapsed_time = elapsed_time / CLOCKS_PER_SEC;
+        elapsed_time /= (double)nn_runtime_cycle_frequency_hz();
         printf("Inference time: %.6f seconds\n", elapsed_time);
         printf("Overall accuracy: %.2f%% (%d/%d correct)\n", (double)correct / NUM_SAMPLES * 100.0, correct, NUM_SAMPLES);
         freeCNN(model);
@@ -270,14 +261,14 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
         const int8_t *embedding = random_embedding;
         bool label = valid_embedding;
 
-        uint64_t start_cycle = read_rdcycle();
+        uint64_t start_cycle = nn_runtime_read_cycles();
         conv1d_i8_vpu(conv1, (void *)embedding, buffer1);
         conv1d_i8_vpu(conv2, buffer1, buffer2);
         conv1d_i8_vpu(conv3, buffer2, buffer1);
         AdaptiveMaxPool1d_wc_int8_vpu(maxpool, buffer1, buffer2);
         fullyconnected_int8_vpu(fc1, buffer2, buffer1);
         fullyconnected_int8_vpu(fc2, buffer1, buffer2);
-        uint64_t end_cycle = read_rdcycle();
+        uint64_t end_cycle = nn_runtime_read_cycles();
 
         const int8_t *output = (const int8_t *)buffer2;
         printf("Inference cycles: %lu cycles\n", (unsigned long)(end_cycle - start_cycle));

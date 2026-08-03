@@ -1,5 +1,14 @@
 # Scalar CPU FFT testbench
 
+Linux/Spike and bare-metal compile the same `testbench/fft_cpu/fft_cpu.c`
+source and execute the same `main()`. Bare-metal replaces only startup,
+linking, minilib, and the `nn_runtime` implementation; there is no separate
+application adapter.
+The bare-metal startup prints hardware information before entering this shared
+`main()`.
+Extension results are diagnostic only; missing or unknown entries are reported
+and execution continues.
+
 This directory contains a scalar CPU batch of 64 independent, single-precision
 radix-2 FFTs. `fft_cpu.c` contains no RVV intrinsics and reads its input and
 NumPy ground truth from the local `fft_vectors.h`. This header is generated with

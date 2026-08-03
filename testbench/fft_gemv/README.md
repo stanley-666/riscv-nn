@@ -1,5 +1,14 @@
 # RVV DFT GEMV testbench
 
+Linux/Spike and bare-metal compile the same `testbench/fft_gemv/fft_gemv.c`
+source and execute the same `main()`. Bare-metal replaces only startup,
+linking, minilib, and the `nn_runtime` implementation; there is no separate
+application adapter.
+The bare-metal startup prints hardware and RVV/VLEN information before entering
+this shared `main()`.
+Extension results are diagnostic only; missing or unknown entries are reported
+and execution continues.
+
 This testbench expresses the 1024-point complex DFT as Conv1D-style
 scalar-vector MAC operations. The original input arrays remain unchanged. Each
 scalar input sample multiplies contiguous vectors of twiddle weights and

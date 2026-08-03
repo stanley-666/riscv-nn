@@ -35,6 +35,7 @@ if(NN_BACKEND STREQUAL "gemmini")
 
   add_executable(${NN_GEMMINI_TARGET}
     testbench/${NN_TESTBENCH}/${NN_TESTBENCH}.c
+    baremetal/platform_info.c
     baremetal/syscalls.c
     ${NN_GEMMINI_MINILIB_SOURCES}
     baremetal/trap.c
@@ -52,6 +53,8 @@ if(NN_BACKEND STREQUAL "gemmini")
   target_compile_definitions(${NN_GEMMINI_TARGET} PRIVATE
     BAREMETAL=1 PREALLOCATE=1 MULTITHREAD=1 PRINT_TILE=0
     BAREMETAL_CPU_HZ=${NN_BAREMETAL_CPU_HZ}
+    NN_TESTBENCH_NAME="${NN_TESTBENCH}"
+    NN_HARDWARE_CONFIG_NAME="${NN_HARDWARE_CONFIG}"
     NN_BACKEND_CPU=0 NN_BACKEND_VECTOR=0 NN_BACKEND_GEMMINI=1)
   target_compile_options(${NN_GEMMINI_TARGET} PRIVATE
     -O3 -ffast-math -march=rv64gc -mabi=lp64d -mcmodel=medany
@@ -94,59 +97,50 @@ elseif(NN_BACKEND STREQUAL "cpu")
     message(FATAL_ERROR "Bare-metal CPU FFT requires NN_HARDWARE_CONFIG=cpu")
   endif()
 elseif(NOT NN_BACKEND STREQUAL "vector")
-  message(FATAL_ERROR "Bare-metal adapters currently require NN_BACKEND=cpu, vector, or gemmini")
+  message(FATAL_ERROR "Bare-metal testbenches currently require NN_BACKEND=cpu, vector, or gemmini")
 endif()
 nn_baremetal_profile("${NN_HARDWARE_CONFIG}" NN_ARCH)
 
 if(NN_TESTBENCH STREQUAL "sentence_inference_fp32")
-  set(NN_APP_DIR baremetal/apps/sentence_fp32)
+  set(NN_TESTBENCH_SOURCE testbench/sentence_inference_fp32/sentence_inference_fp32.c)
   set(NN_MODEL_DIR testbench/sentence_inference_fp32)
 elseif(NN_TESTBENCH STREQUAL "sentence_inference_int8")
-  set(NN_APP_DIR baremetal/apps/sentence_int8)
+  set(NN_TESTBENCH_SOURCE testbench/sentence_inference_int8/sentence_inference_int8.c)
   set(NN_MODEL_DIR testbench/sentence_inference_int8)
 elseif(NN_TESTBENCH STREQUAL "gesture_model")
-  set(NN_APP_DIR baremetal/apps/gesture_fp32)
+  set(NN_TESTBENCH_SOURCE testbench/gesture_model/gesture_recognition_fp32.c)
   set(NN_MODEL_DIR testbench/gesture_model)
 elseif(NN_TESTBENCH STREQUAL "kyber")
-  set(NN_APP_DIR baremetal/apps/kyber)
+  set(NN_TESTBENCH_SOURCE testbench/kyber/kyber_nouv_rvv.c)
   set(NN_MODEL_DIR testbench/kyber)
-  set(NN_APP_EXTRA_SOURCE testbench/kyber/kyber_nouv_rvv.c)
 elseif(NN_TESTBENCH STREQUAL "fft")
-  set(NN_APP_DIR baremetal/apps/fft)
+  set(NN_TESTBENCH_SOURCE testbench/fft/fft.c)
   set(NN_MODEL_DIR testbench/fft)
-  set(NN_APP_EXTRA_SOURCE testbench/fft/fft.c)
 elseif(NN_TESTBENCH STREQUAL "fft_gemv")
-  set(NN_APP_DIR baremetal/apps/fft_gemv)
+  set(NN_TESTBENCH_SOURCE testbench/fft_gemv/fft_gemv.c)
   set(NN_MODEL_DIR testbench/fft_gemv)
-  set(NN_APP_EXTRA_SOURCE testbench/fft_gemv/fft_gemv.c)
 elseif(NN_TESTBENCH STREQUAL "fft_batched")
-  set(NN_APP_DIR baremetal/apps/fft_batched)
+  set(NN_TESTBENCH_SOURCE testbench/fft_batched/fft_batched.c)
   set(NN_MODEL_DIR testbench/fft_batched)
-  set(NN_APP_EXTRA_SOURCE testbench/fft_batched/fft_batched.c)
 elseif(NN_TESTBENCH STREQUAL "fft_batched_int8")
-  set(NN_APP_DIR baremetal/apps/fft_batched_int8)
+  set(NN_TESTBENCH_SOURCE testbench/fft_batched_int8/fft_batched_int8.c)
   set(NN_MODEL_DIR testbench/fft_batched_int8)
-  set(NN_APP_EXTRA_SOURCE testbench/fft_batched_int8/fft_batched_int8.c)
 elseif(NN_TESTBENCH STREQUAL "fft_cpu")
-  set(NN_APP_DIR baremetal/apps/fft_cpu)
+  set(NN_TESTBENCH_SOURCE testbench/fft_cpu/fft_cpu.c)
   set(NN_MODEL_DIR testbench/fft_cpu)
-  set(NN_APP_EXTRA_SOURCE testbench/fft_cpu/fft_cpu.c)
 elseif(NN_TESTBENCH STREQUAL "fft_cpu_int8")
-  set(NN_APP_DIR baremetal/apps/fft_cpu_int8)
+  set(NN_TESTBENCH_SOURCE testbench/fft_cpu_int8/fft_cpu_int8.c)
   set(NN_MODEL_DIR testbench/fft_cpu_int8)
-  set(NN_APP_EXTRA_SOURCE testbench/fft_cpu_int8/fft_cpu_int8.c)
 else()
   message(FATAL_ERROR
     "Unsupported bare-metal NN_TESTBENCH='${NN_TESTBENCH}'. Supported: sentence_inference_fp32;sentence_inference_int8;gesture_model;kyber;fft;fft_batched;fft_batched_int8;fft_cpu;fft_cpu_int8;fft_gemv")
 endif()
 
-file(GLOB NN_APP_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${NN_APP_DIR}/*.c")
 file(GLOB NN_MINILIB_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/baremetal/minilib/*.c")
 set(NN_BAREMETAL_SOURCES
-  ${NN_APP_SOURCES}
-  ${NN_APP_EXTRA_SOURCE}
-  baremetal/main.c
+  ${NN_TESTBENCH_SOURCE}
   baremetal/nn_runtime_baremetal.c
+  baremetal/platform_info.c
   baremetal/syscalls.c
   ${NN_MINILIB_SOURCES}
   baremetal/trap.c
@@ -175,11 +169,12 @@ target_include_directories(${NN_TESTBENCH}_baremetal PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/header"
   "${CMAKE_CURRENT_SOURCE_DIR}/csrc"
   "${CMAKE_CURRENT_SOURCE_DIR}/baremetal/include"
-  "${CMAKE_CURRENT_SOURCE_DIR}/${NN_APP_DIR}"
   "${CMAKE_CURRENT_SOURCE_DIR}/${NN_MODEL_DIR}")
 target_compile_definitions(${NN_TESTBENCH}_baremetal PRIVATE
   ${NN_BACKEND_DEFINES} BAREMETAL ENABLE_VECTOR=${NN_BAREMETAL_ENABLE_VECTOR}
   BAREMETAL_CPU_HZ=${NN_BAREMETAL_CPU_HZ}
+  NN_TESTBENCH_NAME="${NN_TESTBENCH}"
+  NN_HARDWARE_CONFIG_NAME="${NN_HARDWARE_CONFIG}"
   BUILD_DATE="cmake" BUILD_TIME="ninja")
 set(NN_BAREMETAL_FLAGS
   -O3 -march=${NN_ARCH} -mabi=lp64d -mtune=rocket

@@ -1,5 +1,14 @@
 # Pure CPU scaled int8 FFT
 
+Linux/Spike and bare-metal compile the same
+`testbench/fft_cpu_int8/fft_cpu_int8.c` source and execute the same `main()`.
+Bare-metal replaces only startup, linking, minilib, and the `nn_runtime`
+implementation; there is no separate application adapter.
+The bare-metal startup prints hardware information before entering this shared
+`main()`.
+Extension results are diagnostic only; missing or unknown entries are reported
+and execution continues.
+
 This is the pure CPU baseline for `fft_batched_int8`, with RVV disabled and
 compiler auto-vectorization disabled. It processes 64 independent
 1024-point complex FFTs in contiguous `[batch][bin]` layout and uses the same

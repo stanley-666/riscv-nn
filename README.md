@@ -42,7 +42,7 @@ repository benchmarks but are not part of the stable public API.
 │       ├── vector/ops/ # Explicit RVV operators grouped by family
 │       └── gemmini/ops/ # Gemmini ISA support and accelerator operators
 ├── header/             # Public headers and model/layer API
-├── baremetal/          # Bare-metal startup, runtime, linker, and app adapters
+├── baremetal/          # Bare-metal startup, runtime, minilib, and linker
 ├── testbench/          # End-to-end model testbenches + Spike results
 ├── py/                 # Training/calibration/data utilities
 └── scripts/            # Configure, build, and checked flashing helpers
@@ -225,9 +225,9 @@ builds, `[profile]` becomes `NN_HARDWARE_CONFIG`:
 
 | Profile | Compiler `-march` or target | Intended target |
 | --- | --- | --- |
-| `V128D128B` | `rv64gcv_zicntr_zihpm_zvl128b_zve64d_zvfh_zfh_zba_zbb_zbs_zvbb` | RVV hardware with VLEN=128 |
-| `V256D128B` | `rv64gcv_zicntr_zihpm_zvl256b_zve64d_zvfh_zfh_zba_zbb_zbs_zvbb` | RVV hardware with VLEN=256 |
-| `V512D128B` | `rv64gcv_zicntr_zihpm_zvl512b_zve64d_zvfh_zfh_zba_zbb_zbs_zvbb` | RVV hardware with VLEN=512 |
+| `V128D128B` | `rv64gcv_zicntr_zihpm_zvl128b_zve64d_zvfh_zfh_zba_zbb_zbs_zvbb` | Build profile requiring VLEN >= 128 |
+| `V256D128B` | `rv64gcv_zicntr_zihpm_zvl256b_zve64d_zvfh_zfh_zba_zbb_zbs_zvbb` | Build profile requiring VLEN >= 256 |
+| `V512D128B` | `rv64gcv_zicntr_zihpm_zvl512b_zve64d_zvfh_zfh_zba_zbb_zbs_zvbb` | Build profile requiring VLEN >= 512 |
 | `GEMMINI` | Gemmini-specific RV64GC build | Gemmini bare-metal target |
 
 The `RVV` and Genesys2 names describe specific hardware configurations. Do not
@@ -383,8 +383,8 @@ The current native/per-tensor reference produces INT8 logit `23` and a correct
 classification on both Spike/pk and Gemmini hardware. The recorded hardware
 run takes `1,682,812` cycles at 50 MHz.
 
-Bare-metal adapters are `sentence_inference_fp32`, `sentence_inference_int8`,
-`gesture_model`, `kyber`, `sentence_gemmini`, and
+Bare-metal testbenches include `sentence_inference_fp32`,
+`sentence_inference_int8`, `gesture_model`, `kyber`, `sentence_gemmini`, and
 `fft_batched_int8_gemmini`. Vector targets use their VLEN/datapath profile;
 Gemmini targets use the `GEMMINI` RV64GC profile.
 
@@ -569,20 +569,27 @@ parallel builds are supported.
 ### What Is Shared Between Platforms?
 
 Linux/Spike and bare-metal intentionally use different startup and runtime
-implementations, but share the testbench model graph, weights, inference
-dispatcher, and operator sources:
+implementations, but compile the same testbench source and `main()`:
 
 ```text
 Linux loader / Spike pk                 baremetal/start.S
           |                                     |
-Linux testbench main                    baremetal/main.c
-          |                                     |
-          +------ shared sentence model --------+
-                         |
-                 forward_fp32_vpu()
-                         |
-       csrc/backends/riscv/vector/ops/*
+          +---------- testbench main() ----------+
+                              |
+                     forward_fp32_vpu()
+                              |
+            csrc/backends/riscv/vector/ops/*
 ```
+
+Immediately before calling the shared `main()`, bare-metal startup prints a
+platform-only hardware banner containing the testbench, build profile,
+configured CPU clock, machine identification CSRs, XLEN/FLEN, decoded ISA and
+privilege information, and RVV/VLEN details.
+RVV/VLEN are shown only for a vector-ISA build when the hardware advertises V;
+pure CPU builds do not access the V-only `vlenb` CSR. Unavailable fields are
+omitted. This banner does not alter the testbench source or execution flow.
+Its extension checks are report-only: warnings and unknown capabilities are
+shown, then execution continues into the testbench `main()`.
 
 The common sentence FP32 graph is defined once in
 `testbench/sentence_inference_fp32/sentence_model.h`. Both environments execute:
@@ -595,7 +602,7 @@ The platform-specific boundary is:
 
 | Component | Linux / Spike pk | Bare-metal |
 | --- | --- | --- |
-| Program entry | `testbench/sentence_inference_fp32/sentence_inference_fp32.c` | `baremetal/start.S` then `baremetal/main.c` |
+| Program entry | `testbench/sentence_inference_fp32/sentence_inference_fp32.c` | `baremetal/start.S` then the same testbench `main()` |
 | Allocation runtime | `csrc/nn_runtime_linux.c` | `baremetal/nn_runtime_baremetal.c` and the 64-byte-aligned minilib allocator |
 | Timing | Hosted C runtime and `rdcycle` where available | Platform timer and hardware cycle counter |
 | Link environment | Linux ABI, static for `pk` or dynamic for Linux | Freestanding linker script at `0x80000000` |
@@ -717,7 +724,7 @@ make sentence_inference_int8_dynamic BACKEND=cpu CONFIG=default
 
 ### Bare-metal
 
-The bare-metal application adapters currently support
+The bare-metal build currently supports
 `sentence_inference_fp32`, `sentence_inference_int8`, `gesture_model`, and
 `kyber`. They use the same RVV operators as the Linux / Spike pk builds. Build
 a raw image, ELF, or disassembly with:
@@ -737,10 +744,8 @@ make -j$(nproc) baremetal \
     HARDWARE_CONFIG=V128D128B
 ```
 
-The INT8 adapter uses five warm-up runs followed by 100 measured inference
-runs. It reports the average cycle count using only one cycle-counter read
-before and after the measured loop. Its ping-pong buffers are statically
-allocated and aligned to 64 bytes.
+The resulting image executes the same INT8 testbench `main()` as Linux/Spike;
+its ping-pong buffers are statically allocated and aligned to 64 bytes.
 
 Build the Gesture FP32 and Kyber images with:
 
@@ -783,11 +788,11 @@ Supported bare-metal hardware profiles are `V128D128B`, `V256D128B`, and
 build/baremetal/<testbench>/<hardware>_nn_rvv_baremetal.{elf,bin,dump,map}
 ```
 
-The bare-metal build shares the model, layers, and operator sources in
-`csrc/`, but replaces Linux allocation and system support with
+The bare-metal build compiles the same testbench `main()`, model, layers, and
+operator sources, but replaces Linux allocation and system support with
 `baremetal/nn_runtime_baremetal.c`, the 64-byte-aligned allocator, startup,
-minilib, trap handling, and linker script. Each adapter reuses model data from
-its matching directory under `testbench/`.
+minilib, trap handling, and linker script. There is no separate application
+adapter to keep synchronized.
 
 ### Build controls and cleanup
 

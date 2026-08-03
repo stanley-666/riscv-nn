@@ -4,49 +4,40 @@ HEADER_DIR        := $(ROOT_DIR)/header
 
 TESTBENCH        ?= sentence_inference_fp32
 ifeq ($(TESTBENCH),sentence_inference_fp32)
-  DEFAULT_APP_DIR        := $(CURDIR)/apps/sentence_fp32
+  TESTBENCH_SRC          := $(ROOT_DIR)/testbench/sentence_inference_fp32/sentence_inference_fp32.c
   DEFAULT_MODEL_DATA_DIR := $(ROOT_DIR)/testbench/sentence_inference_fp32
 else ifeq ($(TESTBENCH),sentence_inference_int8)
-  DEFAULT_APP_DIR        := $(CURDIR)/apps/sentence_int8
+  TESTBENCH_SRC          := $(ROOT_DIR)/testbench/sentence_inference_int8/sentence_inference_int8.c
   DEFAULT_MODEL_DATA_DIR := $(ROOT_DIR)/testbench/sentence_inference_int8
 else ifeq ($(TESTBENCH),gesture_model)
-  DEFAULT_APP_DIR        := $(CURDIR)/apps/gesture_fp32
+  TESTBENCH_SRC          := $(ROOT_DIR)/testbench/gesture_model/gesture_recognition_fp32.c
   DEFAULT_MODEL_DATA_DIR := $(ROOT_DIR)/testbench/gesture_model
 else ifeq ($(TESTBENCH),kyber)
-  DEFAULT_APP_DIR        := $(CURDIR)/apps/kyber
+  TESTBENCH_SRC          := $(ROOT_DIR)/testbench/kyber/kyber_nouv_rvv.c
   DEFAULT_MODEL_DATA_DIR := $(ROOT_DIR)/testbench/kyber
-  DEFAULT_APP_EXTRA_SRCS := $(ROOT_DIR)/testbench/kyber/kyber_nouv_rvv.c
 else ifeq ($(TESTBENCH),fft)
-  DEFAULT_APP_DIR        := $(CURDIR)/apps/fft
+  TESTBENCH_SRC          := $(ROOT_DIR)/testbench/fft/fft.c
   DEFAULT_MODEL_DATA_DIR := $(ROOT_DIR)/testbench/fft
-  DEFAULT_APP_EXTRA_SRCS := $(ROOT_DIR)/testbench/fft/fft.c
 else ifeq ($(TESTBENCH),fft_gemv)
-  DEFAULT_APP_DIR        := $(CURDIR)/apps/fft_gemv
+  TESTBENCH_SRC          := $(ROOT_DIR)/testbench/fft_gemv/fft_gemv.c
   DEFAULT_MODEL_DATA_DIR := $(ROOT_DIR)/testbench/fft_gemv
-  DEFAULT_APP_EXTRA_SRCS := $(ROOT_DIR)/testbench/fft_gemv/fft_gemv.c
 else ifeq ($(TESTBENCH),fft_batched)
-  DEFAULT_APP_DIR        := $(CURDIR)/apps/fft_batched
+  TESTBENCH_SRC          := $(ROOT_DIR)/testbench/fft_batched/fft_batched.c
   DEFAULT_MODEL_DATA_DIR := $(ROOT_DIR)/testbench/fft_batched
-  DEFAULT_APP_EXTRA_SRCS := $(ROOT_DIR)/testbench/fft_batched/fft_batched.c
 else ifeq ($(TESTBENCH),fft_batched_int8)
-  DEFAULT_APP_DIR        := $(CURDIR)/apps/fft_batched_int8
+  TESTBENCH_SRC          := $(ROOT_DIR)/testbench/fft_batched_int8/fft_batched_int8.c
   DEFAULT_MODEL_DATA_DIR := $(ROOT_DIR)/testbench/fft_batched_int8
-  DEFAULT_APP_EXTRA_SRCS := $(ROOT_DIR)/testbench/fft_batched_int8/fft_batched_int8.c
 else ifeq ($(TESTBENCH),fft_cpu)
-  DEFAULT_APP_DIR        := $(CURDIR)/apps/fft_cpu
+  TESTBENCH_SRC          := $(ROOT_DIR)/testbench/fft_cpu/fft_cpu.c
   DEFAULT_MODEL_DATA_DIR := $(ROOT_DIR)/testbench/fft_cpu
-  DEFAULT_APP_EXTRA_SRCS := $(ROOT_DIR)/testbench/fft_cpu/fft_cpu.c
 else ifeq ($(TESTBENCH),fft_cpu_int8)
-  DEFAULT_APP_DIR        := $(CURDIR)/apps/fft_cpu_int8
+  TESTBENCH_SRC          := $(ROOT_DIR)/testbench/fft_cpu_int8/fft_cpu_int8.c
   DEFAULT_MODEL_DATA_DIR := $(ROOT_DIR)/testbench/fft_cpu_int8
-  DEFAULT_APP_EXTRA_SRCS := $(ROOT_DIR)/testbench/fft_cpu_int8/fft_cpu_int8.c
 else
-  $(error No bare-metal adapter for TESTBENCH='$(TESTBENCH)'. Supported: sentence_inference_fp32 sentence_inference_int8 gesture_model kyber fft fft_batched fft_batched_int8 fft_cpu fft_cpu_int8 fft_gemv)
+  $(error No bare-metal testbench source for TESTBENCH='$(TESTBENCH)'. Supported: sentence_inference_fp32 sentence_inference_int8 gesture_model kyber fft fft_batched fft_batched_int8 fft_cpu fft_cpu_int8 fft_gemv)
 endif
 
-APP_DIR          ?= $(DEFAULT_APP_DIR)
 MODEL_DATA_DIR   ?= $(DEFAULT_MODEL_DATA_DIR)
-APP_EXTRA_SRCS   ?= $(DEFAULT_APP_EXTRA_SRCS)
 
 CROSS_COMPILE    ?= /opt/riscv_baremetal_medany/bin/riscv64-unknown-elf-
 CC               := $(CROSS_COMPILE)gcc
@@ -84,12 +75,14 @@ TARGET           ?= $(BUILD_DIR)/$(TESTBENCH)/$(HARDWARE_CONFIG)_$(TARGET_SUFFIX
 OBJ_DIR          := $(BUILD_DIR)/$(TESTBENCH)/$(HARDWARE_CONFIG)/obj
 
 INCLUDES         := -I$(HEADER_DIR) -I$(SRC_DIR) -I$(CURDIR)/include \
-                    -I$(APP_DIR) -I$(MODEL_DATA_DIR)
+                    -I$(MODEL_DATA_DIR)
 COMMON_CFLAGS    := -O3 -march=$(ARCH) -mabi=$(ABI) -mtune=rocket \
                     -msmall-data-limit=0 -Wall -Wextra -std=c11 \
                     -DBAREMETAL -DENABLE_VECTOR=$(BAREMETAL_ENABLE_VECTOR) -ffreestanding \
                     -nostdlib -nostartfiles -mcmodel=medany \
                     -DBAREMETAL_CPU_HZ=$(BAREMETAL_CPU_HZ) \
+                    -DNN_TESTBENCH_NAME=\"$(TESTBENCH)\" \
+                    -DNN_HARDWARE_CONFIG_NAME=\"$(HARDWARE_CONFIG)\" \
                     -DBUILD_DATE=\"$(shell date +%Y%m%d)\" \
                     -DBUILD_TIME=\"$(shell date +%H%M%S)\" $(INCLUDES)
 
@@ -104,12 +97,11 @@ NN_COMMON_SRC_DIR := $(SRC_DIR)
 include $(ROOT_DIR)/make/common.mk
 COMMON_CFLAGS    += $(NN_BACKEND_CPPFLAGS)
 CORE_SRCS        := $(NN_COMMON_SRCS)
-APP_SRCS         := $(wildcard $(APP_DIR)/*.c) $(APP_EXTRA_SRCS)
 MINILIB_SRCS     := $(sort $(wildcard $(CURDIR)/minilib/*.c))
-RUNTIME_SRCS     := $(CURDIR)/main.c $(CURDIR)/nn_runtime_baremetal.c $(CURDIR)/syscalls.c \
+RUNTIME_SRCS     := $(CURDIR)/nn_runtime_baremetal.c $(CURDIR)/platform_info.c $(CURDIR)/syscalls.c \
                     $(MINILIB_SRCS) $(CURDIR)/trap.c
 STARTUP          := $(CURDIR)/start.S
-ALL_C_SRCS       := $(CORE_SRCS) $(APP_SRCS) $(RUNTIME_SRCS)
+ALL_C_SRCS       := $(CORE_SRCS) $(TESTBENCH_SRC) $(RUNTIME_SRCS)
 OBJS             := $(patsubst $(ROOT_DIR)/%.c,$(OBJ_DIR)/%.o,$(ALL_C_SRCS))
 STARTUP_OBJ      := $(OBJ_DIR)/baremetal/start.o
 DEPS             := $(OBJS:.o=.d)

@@ -1,5 +1,13 @@
 # RVV FFT testbench
 
+Linux/Spike and bare-metal compile the same `testbench/fft/fft.c` source and
+execute the same `main()`. Bare-metal replaces only startup, linking, minilib,
+and the `nn_runtime` implementation; there is no separate application adapter.
+The bare-metal startup prints hardware and RVV/VLEN information before entering
+this shared `main()`.
+Extension results are diagnostic only; missing or unknown entries are reported
+and execution continues.
+
 完整的 CPU、RVV、Gemmini，FP32/int8，bin-major/batch-major、VLEN/DLEN、
 LMUL/fusion 與倍數重算，請見
 [`FFT_COMPLETE_RECALCULATED_REPORT.md`](FFT_COMPLETE_RECALCULATED_REPORT.md)。

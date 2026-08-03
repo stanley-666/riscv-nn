@@ -1,5 +1,14 @@
 # Batched scaled int8 FFT
 
+Linux/Spike and bare-metal compile the same
+`testbench/fft_batched_int8/fft_batched_int8.c` source and execute the same
+`main()`. Bare-metal replaces only startup, linking, minilib, and the
+`nn_runtime` implementation; there is no separate application adapter.
+The bare-metal startup prints hardware and RVV/VLEN information before entering
+this shared `main()`.
+Extension results are diagnostic only; missing or unknown entries are reported
+and execution continues.
+
 This testbench runs 64 independent 1024-point complex radix-2 FFTs with RVV
 lanes spanning the batch dimension. Inputs, outputs, and twiddle factors use
 signed Q7 (`int8_t`). Individual products widen to `int16_t` and complex
