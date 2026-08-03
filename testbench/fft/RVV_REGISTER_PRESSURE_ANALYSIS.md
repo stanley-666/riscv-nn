@@ -92,6 +92,30 @@ The m4 fused function reserves only `4 × vlenb = 256` bytes and contains one
 `vs4r.v`/`vl4re32.v` pair. The m2 fused function contains no whole-register
 spill instruction.
 
+### Q7 bin-major radix-2 kernels
+
+| Function | Dynamic vector spill area at VLEN=512 | Whole-register stores | Whole-register reloads |
+| --- | ---: | ---: | ---: |
+| `fft_butterflies_q7_m2` | 0 | 0 | 0 |
+| `fft_butterflies_q7_m4` | 0 | 0 | 0 |
+| `fft_butterflies_rvv_q7` (m8 accumulator) | 512 bytes | 2 × `vs8r.v` | 2 × `vl8re32.v` |
+| `fft_butterflies_q7_m2_stage_fused` | 0 | 0 | 0 |
+| `fft_butterflies_q7_m4_stage_fused` | 0 | 0 | 0 |
+| `fft_butterflies_q7_m8_stage_fused` | 1,536 bytes | 13 total | 6 total |
+
+The non-fused m8 prologue reserves `8 × vlenb = 512` bytes. Its two m8
+stores and two m8 reloads show that Q7 widening is sufficient to spill even
+without fusion. The fused-m8 prologue reserves `24 × vlenb = 1,536` bytes.
+Its stores comprise seven `vs2r.v`, three `vs4r.v`, and three `vs8r.v`
+instructions; its reloads comprise three `vl4re16.v` and three `vl8re32.v`
+instructions. The m2 and m4 variants, fused or not, have no dynamic vector
+stack allocation and no whole-register spill instruction.
+
+These functions are marked `noinline` so the optimized ELF retains one symbol
+per analysis target. Without that boundary, GCC 15 can inline the six
+bin-major variants into the benchmark driver, making per-kernel spill counts
+ambiguous even though the executed arithmetic is unchanged.
+
 ### Q7 batch-major radix-2 kernels
 
 | Function | Dynamic vector spill area at VLEN=512 | Whole-register stores | Whole-register reloads |
@@ -270,11 +294,15 @@ $OBJDUMP -d \
 $OBJDUMP -d \
   --disassemble=fft_batch_major_q7_m8 \
   build/baremetal/fft_batched_int8/V512D128B_nn_rvv_baremetal.elf
+
+$OBJDUMP -d \
+  --disassemble=fft_butterflies_q7_m8_stage_fused \
+  build/baremetal/fft_batched_int8/V512D128B_nn_rvv_baremetal.elf
 ```
 
 Search the output for:
 
 ```text
 vs2r.v  vs4r.v  vs8r.v
-vl2re32.v  vl4re32.v  vl8re32.v
+vl2re*.v  vl4re*.v  vl8re*.v
 ```
