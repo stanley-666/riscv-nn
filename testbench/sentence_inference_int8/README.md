@@ -4,6 +4,9 @@ Linux/Spike and bare-metal compile this directory's
 `sentence_inference_int8.c` source and execute the same `main()`. Bare-metal
 replaces only startup, linking, minilib, and the `nn_runtime` implementation;
 there is no separate application adapter.
+CPU and RVV also use the same `weights_q.h`, test dataset, and
+`sentence_model.h` topology. Only the inference backend selected by
+`RUN_FORWARD` changes.
 The bare-metal startup prints hardware and RVV/VLEN information before entering
 this shared `main()`.
 Extension results are diagnostic only; missing or unknown entries are reported

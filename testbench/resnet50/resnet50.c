@@ -1,12 +1,25 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
 
 #include "nn_layer.h"
+#include "nn_runtime.h"
 #include "nn_utils.h"
+#if NN_BACKEND_CPU
+#include "nn_infer_cpu.h"
+#endif
+#if NN_BACKEND_VECTOR
 #include "nn_infer_vpu.h"
+#endif
 #include "resnet50_weights.h"
 #include "resnet50_io.h"
+
+#if NN_BACKEND_VECTOR
+#define RUN_FORWARD(model, input) forward_fp32_vpu((model), (input))
+#define BACKEND_NAME "RVV"
+#else
+#define RUN_FORWARD(model, input) forward((model), (input))
+#define BACKEND_NAME "CPU"
+#endif
 
 #define RESNET_INPUT_H 224
 #define RESNET_INPUT_W 224
@@ -17,12 +30,6 @@
 
 static float buffer1_static[RESNET_MAX_ELEMS] __attribute__((aligned(64)));
 static float buffer2_static[RESNET_MAX_ELEMS] __attribute__((aligned(64)));
-
-uint64_t read_rdcycle() {
-    uint64_t cycle;
-    __asm__ volatile ("rdcycle %0" : "=r" (cycle));
-    return cycle;
-}
 
 void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
     (void)num_elem;
@@ -89,7 +96,8 @@ NNModule *add_bottleneck(CNN *model,
 }
 
 void resnet50_inference(void) {
-    printf("ResNet50 Inference Demo (RVV)\n");
+    printf("ResNet50 Inference Demo (%s)\n", BACKEND_NAME);
+    printf("Weights/model definition: shared CPU/RVV path\n");
     printf("Initializing ping-pong buffers...\n");
     init_pingpong_buffer(RESNET_MAX_ELEMS, ELEM_FLOAT32);
     size_t shared_skip_bytes = RESNET_SKIP_MAX_ELEMS * sizeof(float);
@@ -210,8 +218,9 @@ void resnet50_inference(void) {
 
     printf("Build ResNet50 complete...\n");
     printf("Starting inference...\n");
-    // VPU path expects NHWC input layout; source test vector is NCHW.
     size_t input_elems = RESNET_INPUT_H * RESNET_INPUT_W * RESNET_INPUT_C;
+#if NN_BACKEND_VECTOR
+    // The VPU path expects NHWC; the exported source vector is NCHW.
     float *input_nhwc = (float *)safe_malloc(input_elems * sizeof(float));
     for (int h = 0; h < RESNET_INPUT_H; ++h) {
         for (int w = 0; w < RESNET_INPUT_W; ++w) {
@@ -222,16 +231,19 @@ void resnet50_inference(void) {
             }
         }
     }
+    const float *inference_input = input_nhwc;
+#else
+    // The scalar CPU kernels consume the exported NCHW layout directly.
+    const float *inference_input = resnet50_input;
+#endif
 
     forward_input_bytes = input_elems * sizeof(float);
-    clock_t start = clock();
-    uint64_t start_cycle = read_rdcycle();
-    forward_fp32_vpu(model, (void*)input_nhwc);
-    uint64_t end_cycle = read_rdcycle();
-    clock_t end = clock();
+    uint64_t start_cycle = nn_runtime_read_cycles();
+    RUN_FORWARD(model, (void *)inference_input);
+    uint64_t end_cycle = nn_runtime_read_cycles();
     uint64_t cycle_diff = end_cycle - start_cycle;
-    printf("ResNet50 inference cycles: %lu cycles\n", cycle_diff);
-    double elapsed = (double)(end - start) / CLOCKS_PER_SEC;
+    printf("ResNet50 inference cycles: %lu cycles\n", (unsigned long)cycle_diff);
+    double elapsed = nn_runtime_cycles_to_seconds(cycle_diff);
     printf("ResNet50 inference time: %.6f seconds\n", elapsed);
 
     float *out_ptr = (float *)((model->numModules % 2 == 0) ? buffer1 : buffer2);
@@ -250,7 +262,9 @@ void resnet50_inference(void) {
 
     safe_free(shared_skip_a);
     safe_free(shared_skip_b);
+#if NN_BACKEND_VECTOR
     safe_free(input_nhwc);
+#endif
     freeCNN(model);
 }
 

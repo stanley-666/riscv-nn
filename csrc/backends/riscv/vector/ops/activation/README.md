@@ -97,7 +97,7 @@ than one element or one RVV chunk.
 | `NONE` | Vector store | Vector requantize and store | Exact apart from normal FP32/quantization behavior. |
 | `RELU` | RVV maximum and store | RVV requantize, clamp, and store | Pointwise. |
 | `LEAKY_RELU` | RVV multiply, merge, and store | Scalar activation after requantization | The negative slope is `0.01`. |
-| `SIGMOID` | Degree-9 RVV polynomial | Scalar `expf` path after requantization | The validated Q4.3/Q0.7 fixed-point design is not integrated yet. |
+| `SIGMOID` | Degree-9 RVV polynomial, finalized after FC | Scalar `expf` path after FC requantization | It is not fused into the stable FC kernel. The validated Q4.3/Q0.7 fixed-point design is not integrated yet. |
 | `TANH` | Scalar `tanhf` fallback per RVV chunk | Scalar activation after requantization | Not a fully vectorized implementation. |
 | `GELU` | Scalar `erff` fallback per RVV chunk | Scalar activation after requantization | Not a fully vectorized implementation. |
 | `SOFTMAX` | Full-tensor RVV operator | Unsupported | A chunk callback only stores logits; it does not normalize them. |

@@ -336,6 +336,24 @@ static const activate_store_chunk_kernel_f32m4_t kActivateStoreChunkKernelsF32M4
     [NONE] = activate_store_chunk_none_f32m4,
 };
 
+void activate_store_rvv_f32(float *dst,
+                            const float *src,
+                            int len,
+                            ActivationType act)
+{
+    activate_store_chunk_kernel_f32m8_t kernel =
+        select_activate_store_chunk_kernel_f32m8(act);
+    size_t remaining = (len > 0) ? (size_t)len : 0;
+    while (remaining != 0) {
+        const size_t vl = __riscv_vsetvl_e32m8(remaining);
+        const vfloat32m8_t values = __riscv_vle32_v_f32m8(src, vl);
+        kernel(values, dst, vl);
+        src += vl;
+        dst += vl;
+        remaining -= vl;
+    }
+}
+
 activate_store_chunk_kernel_f32m2_t select_activate_store_chunk_kernel_f32m2(ActivationType act)
 {
     if ((unsigned)act < ACTIVATION_KERNEL_COUNT_F32 && kActivateStoreChunkKernelsF32M2[act] != NULL) {

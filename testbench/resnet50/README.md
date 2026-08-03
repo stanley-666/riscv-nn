@@ -3,6 +3,9 @@
 This testbench currently supports Linux/Spike only. Both CPU and RVV builds
 compile `testbench/resnet50/resnet50.c` and execute its `main()`; no separate
 application source is maintained.
+They share the same exported weights and model construction. The CPU path uses
+the exported NCHW input directly, while the RVV path converts that same input
+to NHWC before calling its backend.
 
 ## Build and run
 

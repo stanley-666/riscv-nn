@@ -2,6 +2,8 @@
 #include "nn_ops.h"
 #include "backends/riscv/vector/ops/conv1d/nn_ops_vpu_conv1d_fp32_internal.h"
 #include "backends/riscv/vector/ops/conv1d/nn_ops_vpu_conv1d_i8_internal.h"
+#include "backends/riscv/vector/ops/activation/nn_activation_fp_internal.h"
+#include "nn_utils.h"
 #include <string.h>
 #include <time.h>
 #include <stdio.h>
@@ -37,6 +39,48 @@ static void dump_layer_logits_i8(const NNModule *layer, int layer_idx, const voi
     for (size_t i = 0; i < to_print; ++i)
         printf("%d ", data[i]);
     printf("\n");
+}
+
+/* Keep SIGMOID outside the fused FC kernel so the model activation remains
+ * backend-independent. SOFTMAX callers already run the full-tensor operator
+ * explicitly because it needs all logits at once. */
+static void fullyconnected_int8_vpu_with_finalizer(NNModule *layer,
+                                                    void *input,
+                                                    void *output)
+{
+    const ActivationType activation = layer->activation;
+    if (activation != SIGMOID) {
+        fullyconnected_int8_vpu(layer, input, output);
+        return;
+    }
+
+    layer->activation = NONE;
+    fullyconnected_int8_vpu(layer, input, output);
+    layer->activation = activation;
+
+    int8_t *values = (int8_t *)output;
+    const int length = layer->outputShape.W * layer->outputShape.C;
+    for (int i = 0; i < length; ++i)
+        values[i] = activate_i8(values[i], SIGMOID);
+}
+
+static void fullyconnected_fp32_vpu_with_finalizer(NNModule *layer,
+                                                    void *input,
+                                                    void *output)
+{
+    const ActivationType activation = layer->activation;
+    if (activation != SIGMOID) {
+        fullyconnected_fp32_vpu(layer, input, output);
+        return;
+    }
+
+    layer->activation = NONE;
+    fullyconnected_fp32_vpu(layer, input, output);
+    layer->activation = activation;
+
+    const int length = layer->outputShape.W * layer->outputShape.C;
+    activate_store_rvv_f32((float *)output, (const float *)output,
+                           length, SIGMOID);
 }
 
 void forward_int8_vpu(CNN *net, void *input)
@@ -87,7 +131,7 @@ void forward_int8_vpu(CNN *net, void *input)
             transpose_vpu(currentLayer, src, dst);
             break;
         case FC:
-            fullyconnected_int8_vpu(currentLayer, src, dst);
+            fullyconnected_int8_vpu_with_finalizer(currentLayer, src, dst);
             break;
         case LAYERNORM1D:
             printf("LayerNorm1D int8 path is unsupported\n");
@@ -175,7 +219,7 @@ void forward_fp32_vpu_profile(CNN *net, void *input, NNInferenceProfile *profile
             transpose_vpu(currentLayer, src, dst);
             break;
         case FC:
-            fullyconnected_fp32_vpu(currentLayer, src, dst);
+            fullyconnected_fp32_vpu_with_finalizer(currentLayer, src, dst);
             break;
         case LAYERNORM1D:
             layernorm1d_fp32_vpu(currentLayer, src, dst);

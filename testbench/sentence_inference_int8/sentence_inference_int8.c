@@ -11,14 +11,16 @@
 #endif
 #if NN_BACKEND_VECTOR
 #include "nn_infer_vpu.h"
-#include "backends/riscv/vector/ops/conv1d/nn_ops_vpu_conv1d_i8_internal.h"
-#include "backends/riscv/vector/ops/fully_connected/nn_ops_vpu_fc_internal.h"
-#include "backends/riscv/vector/ops/pooling/nn_ops_vpu_pool1d_internal.h"
+#endif
+
+#if NN_BACKEND_VECTOR
+#define RUN_FORWARD(model, input) forward_int8_vpu((model), (input))
+#else
+#define RUN_FORWARD(model, input) forward((model), (input))
 #endif
 
 #include "weights_q.h"
-#include "random_embedding.h"
-//#include "test_dataset_2658.h"
+#include "sentence_model.h"
 #include "test_dataset.h"
 
 #define SENTENCE_INT8_MAX_ELEMS (384 * 256)  // max tensor elements across the model
@@ -34,255 +36,46 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
     memset(buffer2, 0, size);
 }
 
-#ifdef WEIGHTS_Q_H
-#if NN_BACKEND_CPU
-    void sentence_1dcnn_i8() {
-        printf("1D CNN Inference Demo\n");
-        printf("Initializing ping-pong buffers...\n");
-        init_pingpong_buffer(SENTENCE_INT8_MAX_ELEMS, ELEM_INT8);
-        printf("Defining layers...\n");
-        uint64_t layer_def_start = nn_runtime_read_cycles();
-        NNModule *conv1 = nn_Conv1d(1, 384, 5, 64, 1, 2, RELU, conv1_weight, conv1_bias, conv1_M, conv1_zero_points, ELEM_INT8);
-        NNModule *conv2 = nn_Conv1d(64, conv1->outputShape.W, 5, 128, 1, 2, RELU, conv2_weight, conv2_bias, conv2_M, conv2_zero_points, ELEM_INT8);
-        NNModule *conv3 = nn_Conv1d(128, conv2->outputShape.W, 3, 256, 1, 1, RELU, conv3_weight, conv3_bias, conv3_M, conv3_zero_points, ELEM_INT8);
-        NNModule *maxpool = nn_AdaptiveMaxPool1d(conv3->outputShape.C, conv3->outputShape.W, 1, ELEM_INT8);
-        NNModule *fc1 = nn_Linear(maxpool->outputShape.C * maxpool->outputShape.W, 128, RELU, fc1_weight, fc1_bias, fc1_M, fc1_zero_points, ELEM_INT8);
-        NNModule *fc2 = nn_Linear(128, 1, NONE, fc2_weight, fc2_bias, fc2_M, fc2_zero_points, ELEM_INT8);
-        uint64_t layer_def_end = nn_runtime_read_cycles();
-        double layer_def_elapsed = nn_runtime_cycles_to_seconds(layer_def_end - layer_def_start);
-        printf("Layer definition time: %.6f seconds\n", layer_def_elapsed);
-        printf("Creating CNN model...\n");
-        CNN* model = createCNN();
+static void sentence_all_i8_shared(void)
+{
+    printf("1D CNN Inference INT8 Demo\n");
+    printf("Weights/model definition: shared CPU/RVV path\n");
+    printf("Initializing ping-pong buffers...\n");
+    init_pingpong_buffer(SENTENCE_INT8_MAX_ELEMS, ELEM_INT8);
+    printf("Defining layers...\n");
+    CNN *model = sentence_int8_create_model();
+    printf("Completed model creation.\n");
 
-        printf("Adding layers to the model...\n");
-        uint64_t add_layer_start = nn_runtime_read_cycles();
-        addLayer(model, conv1);
-        addLayer(model, conv2);
-        addLayer(model, conv3);
-        addLayer(model, maxpool);
-        addLayer(model, fc1);
-        addLayer(model, fc2);
-        uint64_t add_layer_end = nn_runtime_read_cycles();
-        double add_layer_elapsed = nn_runtime_cycles_to_seconds(add_layer_end - add_layer_start);
-        printf("Layer addition time: %.6f seconds\n", add_layer_elapsed);
-        /* input data */
-        int8_t *embedding = (int8_t*)random_embedding;
-        forward_input_bytes = 384 * sizeof(int8_t);
-        // inference
-        uint64_t start_time = nn_runtime_read_cycles();
-        forward(model, embedding);
-        uint64_t end_time = nn_runtime_read_cycles();
-        double elapsed_time = nn_runtime_cycles_to_seconds(end_time - start_time);
-        printf("Inference time: %.6f seconds\n", elapsed_time);
+    int correct = 0;
+    double elapsed_cycles = 0.0;
+    forward_input_bytes = 384 * sizeof(int8_t);
+    for (int i = 0; i < NUM_SAMPLES; ++i) {
+        const int8_t *embedding = test_embeddings[i];
+        const bool label = test_labels[i];
+        const uint64_t start = nn_runtime_read_cycles();
+        RUN_FORWARD(model, (void *)embedding);
+        const uint64_t end = nn_runtime_read_cycles();
+        elapsed_cycles += (double)(end - start);
 
-        // print output
-        const int8_t *output = (int8_t *)((model->numModules % 2 == 0) ? buffer1 : buffer2);
-        printf("Ground truth (valid_embedding): %d\n", valid_embedding);
-        float prob = output[0];
-        int pred = prob >= 0.5f;
-        printf("Model prediction (prob): %.4f -> label %d\n", prob, pred);
-
-        if (pred == valid_embedding) {
-            printf("Prediction correct!\n");
-        } else {
-            printf("Prediction incorrect!\n");
-        }
-
-        if (pred == 1)
-            printf("→ Model predicts: Valid sentence\n");
-        else
-            printf("→ Model predicts: Invalid sentence\n");
-
-        freeCNN(model);
-    }
-
-    void sentence_all_i8() {
-        printf("1D CNN Inference INT8 Demo\n");
-        printf("Initializing ping-pong buffers...\n");
-        init_pingpong_buffer(SENTENCE_INT8_MAX_ELEMS, ELEM_INT8);
-        printf("Defining layers...\n");
-        NNModule *conv1 = nn_Conv1d(1, 384, 5, 64, 1, 2, RELU, conv1_weight, conv1_bias, conv1_M, conv1_zero_points, ELEM_INT8);
-        NNModule *conv2 = nn_Conv1d(64, conv1->outputShape.W, 5, 128, 1, 2, RELU, conv2_weight, conv2_bias, conv2_M, conv2_zero_points, ELEM_INT8);
-        NNModule *conv3 = nn_Conv1d(128, conv2->outputShape.W, 3, 256, 1, 1, RELU, conv3_weight, conv3_bias, conv3_M, conv3_zero_points, ELEM_INT8);
-        NNModule *maxpool = nn_AdaptiveMaxPool1d(conv3->outputShape.C, conv3->outputShape.W, 1, ELEM_INT8);
-        NNModule *fc1 = nn_Linear(maxpool->outputShape.C * maxpool->outputShape.W, 128, RELU, fc1_weight, fc1_bias, fc1_M, fc1_zero_points, ELEM_INT8);
-        NNModule *fc2 = nn_Linear(128, 1, SIGMOID, fc2_weight, fc2_bias, fc2_M, fc2_zero_points, ELEM_INT8);
-
-        CNN* model = createCNN();
-        addLayer(model, conv1);
-        addLayer(model, conv2);
-        addLayer(model, conv3);
-        addLayer(model, maxpool);
-        addLayer(model, fc1);
-        addLayer(model, fc2);
-        printf("Completed model creation.\n");
-
-        int correct = 0 ;
-        forward_input_bytes = 384 * sizeof(int8_t);
-        uint64_t start_time = nn_runtime_read_cycles();
-        for (int i = 0; i < NUM_SAMPLES; i++) {
-            const int8_t *embedding = test_embeddings[i];
-            bool label = test_labels[i];
-
-            forward(model, (void *)embedding);
-            int8_t *output = (int8_t *) ((model->numModules % 2 == 0) ? buffer1 : buffer2);  // 最後輸出在 buffer1
-
-
-            if (output[0] == label) {
-                printf("[%d] correct\n", i);
-                correct++;
-            } else {
-                printf("[%d] false", i);
-                /*
-                for(int j = 0; j < 384; j++)
-                    printf("%d ", embedding[j]);
-                */
-                printf("\n");
-            }
-        }
-
-        uint64_t end_time = nn_runtime_read_cycles();
-        double elapsed_time = nn_runtime_cycles_to_seconds(end_time - start_time);
-        printf("Inference time: %.6f seconds\n", elapsed_time);
-        printf("Overall accuracy: %.2f%% (%d/%d correct)\n", (double)correct / NUM_SAMPLES * 100.0, correct, NUM_SAMPLES);
-        freeCNN(model);
-        
-    }
-
-#endif
-#if NN_BACKEND_VECTOR
-    void sentence_i8_rvv() {
-        printf("1D CNN Inference RVV INT8 Demo\n");
-        printf("Initializing ping-pong buffers...\n");
-        init_pingpong_buffer(SENTENCE_INT8_MAX_ELEMS, ELEM_INT8);
-        printf("Defining layers...\n");
-        NNModule *conv1 = nn_Conv1d(1, 384, 5, 64, 1, 2, RELU, conv1_weight, conv1_bias, conv1_M, conv1_zero_points, ELEM_INT8);
-        NNModule *conv2 = nn_Conv1d(64, conv1->outputShape.W, 5, 128, 1, 2, RELU, conv2_weight, conv2_bias, conv2_M, conv2_zero_points, ELEM_INT8);
-        NNModule *conv3 = nn_Conv1d(128, conv2->outputShape.W, 3, 256, 1, 1, RELU, conv3_weight, conv3_bias, conv3_M, conv3_zero_points, ELEM_INT8);
-        NNModule *maxpool = nn_AdaptiveMaxPool1d(conv3->outputShape.C, conv3->outputShape.W, 1, ELEM_INT8);
-        NNModule *fc1 = nn_Linear(maxpool->outputShape.C * maxpool->outputShape.W, 128, RELU, fc1_weight, fc1_bias, fc1_M, fc1_zero_points, ELEM_INT8);
-        NNModule *fc2 = nn_Linear(128, 1, NONE, fc2_weight, fc2_bias, fc2_M, fc2_zero_points, ELEM_INT8);
-
-        CNN* model = createCNN();
-        addLayer(model, conv1);
-        addLayer(model, conv2);
-        addLayer(model, conv3);
-        addLayer(model, maxpool);
-        addLayer(model, fc1);
-        addLayer(model, fc2);
-        printf("Completed model creation.\n");
-        forward_input_bytes = 384 * sizeof(int8_t);
-        int correct = 0 ;
-        const int8_t *embedding = random_embedding;
-        bool label = valid_embedding;
-        uint64_t start_cycle = nn_runtime_read_cycles();
-        forward_int8_vpu(model, (void *)embedding);
-        uint64_t end_cycle = nn_runtime_read_cycles();
-        const int8_t *output = (int8_t *)((model->numModules % 2 == 0) ? buffer1 : buffer2);
-        printf("Model prediction (output[0]): %d\n", output[0]);
+        const int8_t *output = (const int8_t *)
+            ((model->numModules % 2 == 0) ? buffer1 : buffer2);
+        printf("Output[%d]: %d, Label: %d\n", i, output[0], label);
         if (output[0] == label) {
-            printf("correct\n");
-            correct++;
+            printf("[%d] correct\n", i);
+            ++correct;
         } else {
-            printf("false\n");
+            printf("[%d] false\n", i);
         }
-
-        uint64_t cycle_diff = end_cycle - start_cycle;
-        double elapsed_time = nn_runtime_cycles_to_seconds(cycle_diff);
-        printf("Inference cycles: %lu cycles\n", cycle_diff);
-        printf("Inference time: %.6f seconds\n", elapsed_time);
-        freeCNN(model);
     }
 
-    void sentence_all_i8_rvv() {
-        printf("1D CNN Inference RVV INT8 Demo\n");
-        printf("Initializing ping-pong buffers...\n");
-        init_pingpong_buffer(SENTENCE_INT8_MAX_ELEMS, ELEM_INT8);
-        printf("Defining layers...\n");
-        NNModule *conv1 = nn_Conv1d(1, 384, 5, 64, 1, 2, RELU, conv1_weight, conv1_bias, conv1_M, conv1_zero_points, ELEM_INT8);
-        NNModule *conv2 = nn_Conv1d(64, conv1->outputShape.W, 5, 128, 1, 2, RELU, conv2_weight, conv2_bias, conv2_M, conv2_zero_points, ELEM_INT8);
-        NNModule *conv3 = nn_Conv1d(128, conv2->outputShape.W, 3, 256, 1, 1, RELU, conv3_weight, conv3_bias, conv3_M, conv3_zero_points, ELEM_INT8);
-        NNModule *maxpool = nn_AdaptiveMaxPool1d(conv3->outputShape.C, conv3->outputShape.W, 1, ELEM_INT8);
-        NNModule *fc1 = nn_Linear(maxpool->outputShape.C * maxpool->outputShape.W, 128, NONE, fc1_weight, fc1_bias, fc1_M, fc1_zero_points, ELEM_INT8);
-        NNModule *fc2 = nn_Linear(128, 1, SIGMOID, fc2_weight, fc2_bias, fc2_M, fc2_zero_points, ELEM_INT8);
-
-        CNN* model = createCNN();
-        addLayer(model, conv1);
-        addLayer(model, conv2);
-        addLayer(model, conv3);
-        addLayer(model, maxpool);
-        addLayer(model, fc1);
-        addLayer(model, fc2);
-        printf("Completed model creation.\n");
-        forward_input_bytes = 384 * sizeof(int8_t);
-        int correct = 0 ;
-        double elapsed_time = 0;
-        for (int i = 0; i < NUM_SAMPLES; i++) {
-            const int8_t *embedding = test_embeddings[i];
-            bool label = test_labels[i];
-            uint64_t start_time = nn_runtime_read_cycles();
-            forward_int8_vpu(model, (void *)embedding);
-            uint64_t end_time = nn_runtime_read_cycles();
-            elapsed_time += (double)(end_time - start_time);
-            const int8_t *output = (int8_t *)((model->numModules % 2 == 0) ? buffer1 : buffer2);
-            printf("Output[%d]: %d, Label: %d\n", i, output[0], label);
-            if (output[0] == label) {
-                printf("[%d] correct\n", i);
-                correct++;
-            } else {
-                printf("[%d] false", i);
-                /*
-                for(int j = 0; j < 384; j++)
-                    printf("%d ", embedding[j]);
-                */
-                printf("\n");
-            }
-        }
-
-        elapsed_time /= (double)nn_runtime_cycle_frequency_hz();
-        printf("Inference time: %.6f seconds\n", elapsed_time);
-        printf("Overall accuracy: %.2f%% (%d/%d correct)\n", (double)correct / NUM_SAMPLES * 100.0, correct, NUM_SAMPLES);
-        freeCNN(model);
-        
-    }
-
-    // Conv output stays NHWC/WC, then use WC-optimized adaptive maxpool1d directly.
-    void sentence_i8_rvv_wc_pool_direct() {
-        printf("1D CNN RVV INT8 Demo (WC AdaptivePool direct)\n");
-        init_pingpong_buffer(SENTENCE_INT8_MAX_ELEMS, ELEM_INT8);
-
-        NNModule *conv1 = nn_Conv1d(1, 384, 5, 64, 1, 2, RELU, conv1_weight, conv1_bias, conv1_M, conv1_zero_points, ELEM_INT8);
-        NNModule *conv2 = nn_Conv1d(64, conv1->outputShape.W, 5, 128, 1, 2, RELU, conv2_weight, conv2_bias, conv2_M, conv2_zero_points, ELEM_INT8);
-        NNModule *conv3 = nn_Conv1d(128, conv2->outputShape.W, 3, 256, 1, 1, RELU, conv3_weight, conv3_bias, conv3_M, conv3_zero_points, ELEM_INT8);
-        NNModule *maxpool = nn_AdaptiveMaxPool1d(conv3->outputShape.C, conv3->outputShape.W, 1, ELEM_INT8);
-        NNModule *fc1 = nn_Linear(conv3->outputShape.C, 128, RELU, fc1_weight, fc1_bias, fc1_M, fc1_zero_points, ELEM_INT8);
-        NNModule *fc2 = nn_Linear(128, 1, NONE, fc2_weight, fc2_bias, fc2_M, fc2_zero_points, ELEM_INT8);
-
-        const int8_t *embedding = random_embedding;
-        bool label = valid_embedding;
-
-        uint64_t start_cycle = nn_runtime_read_cycles();
-        conv1d_i8_vpu(conv1, (void *)embedding, buffer1);
-        conv1d_i8_vpu(conv2, buffer1, buffer2);
-        conv1d_i8_vpu(conv3, buffer2, buffer1);
-        AdaptiveMaxPool1d_wc_int8_vpu(maxpool, buffer1, buffer2);
-        fullyconnected_int8_vpu(fc1, buffer2, buffer1);
-        fullyconnected_int8_vpu(fc2, buffer1, buffer2);
-        uint64_t end_cycle = nn_runtime_read_cycles();
-
-        const int8_t *output = (const int8_t *)buffer2;
-        printf("Inference cycles: %lu cycles\n", (unsigned long)(end_cycle - start_cycle));
-        printf("Model prediction (output[0]): %d, label: %d\n", output[0], label);
-
-    }
-#endif
-#endif
+    printf("Inference time: %.6f seconds\n",
+           elapsed_cycles / (double)nn_runtime_cycle_frequency_hz());
+    printf("Overall accuracy: %.2f%% (%d/%d correct)\n",
+           (double)correct / NUM_SAMPLES * 100.0, correct, NUM_SAMPLES);
+    freeCNN(model);
+}
 
 int main() {
-#if NN_BACKEND_VECTOR
-    sentence_all_i8_rvv();
-#else
-    sentence_all_i8();
-#endif
+    sentence_all_i8_shared();
     return 0;
 }
