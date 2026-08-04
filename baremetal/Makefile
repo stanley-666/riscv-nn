@@ -1,6 +1,9 @@
 ROOT_DIR          := $(abspath $(CURDIR)/..)
 SRC_DIR           := $(ROOT_DIR)/csrc
 HEADER_DIR        := $(ROOT_DIR)/header
+BACKEND           ?= vector
+NN_COMMON_SRC_DIR := $(SRC_DIR)
+include $(ROOT_DIR)/make/common.mk
 
 TESTBENCH        ?= sentence_inference_fp32
 ifeq ($(TESTBENCH),sentence_inference_fp32)
@@ -86,15 +89,17 @@ COMMON_CFLAGS    := -O3 -march=$(ARCH) -mabi=$(ABI) -mtune=rocket \
                     -DBUILD_DATE=\"$(shell date +%Y%m%d)\" \
                     -DBUILD_TIME=\"$(shell date +%H%M%S)\" $(INCLUDES)
 
-# Explicit RVV intrinsics remain enabled; only compiler-generated
-# auto-vectorization of scalar/reference code is disabled by default.
-AUTO_VECTORIZE   ?= 0
+# Match the CMake helper policy while allowing an explicit command-line
+# override for comparison builds.
+ifeq ($(BACKEND),vector)
+  AUTO_VECTORIZE ?= 1
+else
+  AUTO_VECTORIZE ?= 0
+endif
 ifeq ($(AUTO_VECTORIZE),0)
   COMMON_CFLAGS += -fno-tree-vectorize -fno-tree-slp-vectorize -fno-builtin
 endif
 
-NN_COMMON_SRC_DIR := $(SRC_DIR)
-include $(ROOT_DIR)/make/common.mk
 COMMON_CFLAGS    += $(NN_BACKEND_CPPFLAGS)
 CORE_SRCS        := $(NN_COMMON_SRCS)
 MINILIB_SRCS     := $(sort $(wildcard $(CURDIR)/minilib/*.c))

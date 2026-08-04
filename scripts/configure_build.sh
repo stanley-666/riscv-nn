@@ -5,7 +5,8 @@
 set -eu
 
 if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then
-    echo "Usage: $0 <linux-pk|baremetal> <cpu|vector|gemmini|all> <testbench> [profile]"
+    echo "Usage: $0 linux-pk <cpu|vector|gemmini|all> <testbench> [profile]" >&2
+    echo "       $0 baremetal <cpu|vector|gemmini> <testbench> [profile]" >&2
     exit 2
 fi
 
@@ -14,6 +15,19 @@ backend=$2
 testbench=$3
 profile=${4:-}
 cmake_bin=${CMAKE:-/usr/bin/cmake}
+
+case "$backend" in
+vector)
+    auto_vectorize=ON
+    ;;
+cpu|gemmini|all)
+    auto_vectorize=OFF
+    ;;
+*)
+    echo "Unsupported backend: $backend" >&2
+    exit 2
+    ;;
+esac
 
 case "$platform" in
 linux-pk)
@@ -29,9 +43,14 @@ linux-pk)
         -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/riscv-linux-gnu.cmake \
         -DNN_PLATFORM=linux-pk -DNN_BACKEND="$backend" \
         -DNN_TESTBENCH="$testbench" -DNN_CONFIG="$profile" \
-        -DNN_LINK_MODE=static -DNN_AUTO_VECTORIZE=OFF
+        -DNN_LINK_MODE=static -DNN_AUTO_VECTORIZE="$auto_vectorize"
     ;;
 baremetal)
+    if [ "$backend" = "all" ]; then
+        echo "Unsupported backend for baremetal: all" >&2
+        echo "Use cpu, vector, or gemmini." >&2
+        exit 2
+    fi
     if [ -z "$profile" ]; then
         if [ "$backend" = "gemmini" ]; then
             profile=GEMMINI
@@ -46,10 +65,10 @@ baremetal)
         -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/riscv-baremetal.cmake \
         -DNN_PLATFORM=baremetal -DNN_BACKEND="$backend" \
         -DNN_TESTBENCH="$testbench" -DNN_HARDWARE_CONFIG="$profile" \
-        -DNN_AUTO_VECTORIZE=OFF
+        -DNN_AUTO_VECTORIZE="$auto_vectorize"
     ;;
 *)
-    echo "Unsupported platform: $platform"
+    echo "Unsupported platform: $platform" >&2
     exit 2
     ;;
 esac

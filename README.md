@@ -112,15 +112,22 @@ The helper configures a separate Ninja directory for every platform, backend,
 testbench, and ISA profile, then builds it using all available workers:
 
 ```sh
-./scripts/configure_build.sh <linux-pk|baremetal> \
+./scripts/configure_build.sh linux-pk \
     <cpu|vector|gemmini|all> <testbench> [profile]
+
+./scripts/configure_build.sh baremetal \
+    <cpu|vector|gemmini> <testbench> [profile]
 ```
+
+The `all` backend is available only for Linux/pk. Bare-metal builds reject it
+before CMake configuration because that platform requires one concrete backend.
 
 Linux scalar CPU baseline:
 
 ```sh
 source ~/chipyard_1.13.0/chipyard/env.sh
 
+# configure_build.sh selects NN_AUTO_VECTORIZE=OFF for the CPU backend.
 ./scripts/configure_build.sh linux-pk cpu sentence_inference_fp32 default
 
 spike --isa=rv64gc_zicntr_zihpm \
@@ -134,12 +141,14 @@ Linux/Spike explicit RVV build:
 # Run this from a shell that has not sourced Chipyard env.sh.
 command -v riscv64-unknown-linux-gnu-gcc
 
+# configure_build.sh selects NN_AUTO_VECTORIZE=ON for the vector backend.
 ./scripts/configure_build.sh linux-pk vector sentence_inference_fp32 zvl512b_cycle
 ```
 
 Bare-metal explicit RVV build:
 
 ```sh
+# configure_build.sh selects NN_AUTO_VECTORIZE=ON for the vector backend.
 ./scripts/configure_build.sh baremetal vector sentence_inference_fp32 V128D128B
 ```
 
@@ -151,6 +160,7 @@ omitted:
 | `linux-pk` | `cpu` | `default` |
 | `linux-pk` | `vector` or `all` | `zvl128b` |
 | `linux-pk` | `gemmini` | `default` |
+| `baremetal` | `cpu` | `cpu` |
 | `baremetal` | `vector` | `V128D128B` |
 | `baremetal` | `gemmini` | `GEMMINI` |
 
@@ -204,7 +214,7 @@ The RVV teaching configuration must be built in a separate shell without
 sourcing Chipyard's `env.sh`:
 
 ```sh
-# Explicit RVV intrinsics with VLEN=512.
+# Explicit RVV intrinsics with VLEN=512 and compiler auto-vectorization enabled.
 command -v riscv64-unknown-linux-gnu-gcc
 
 ./scripts/configure_build.sh \
@@ -215,9 +225,10 @@ spike --isa=rv64gcv_zicntr_zihpm_zvbb_zvl512b_zve64d \
     build/linux-pk/sentence_inference_fp32/zvl512b_cycle/vector/static/sentence_inference_fp32
 ```
 
-`NN_AUTO_VECTORIZE` is forced to `OFF` by `configure_build.sh`. This keeps the
-CPU baseline scalar and ensures that vector builds measure the repository's
-explicit RVV intrinsic kernels rather than compiler-generated vector loops.
+`configure_build.sh` selects `NN_AUTO_VECTORIZE=ON` only for `vector` builds.
+It selects `OFF` for pure CPU and Gemmini builds so their host/reference code
+cannot gain compiler-generated RVV instructions. The `all` backend also keeps
+it `OFF` because it includes the scalar CPU baseline.
 
 All CPU and RVV benchmark profiles include `zicntr_zihpm` because the
 testbenches read cycle and hardware-performance counters. For bare-metal
@@ -249,7 +260,7 @@ is:
     -DNN_TESTBENCH=sentence_inference_fp32 \
     -DNN_CONFIG=zvl512b_cycle \
     -DNN_LINK_MODE=static \
-    -DNN_AUTO_VECTORIZE=OFF
+    -DNN_AUTO_VECTORIZE=ON
 
 /usr/bin/cmake --build \
     build/cmake/linux-pk-sentence_inference_fp32-vector-zvl512b_cycle --parallel
@@ -273,7 +284,8 @@ The equivalent bare-metal configuration is:
     -DNN_PLATFORM=baremetal \
     -DNN_BACKEND=vector \
     -DNN_TESTBENCH=sentence_inference_fp32 \
-    -DNN_HARDWARE_CONFIG=V128D128B
+    -DNN_HARDWARE_CONFIG=V128D128B \
+    -DNN_AUTO_VECTORIZE=ON
 
 /usr/bin/cmake --build \
     build/cmake/baremetal-sentence-vector-V128D128B --parallel
@@ -454,7 +466,8 @@ fresh build directory:
     -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/riscv-linux-gnu.cmake \
     -DRISCV_LINUX_PREFIX=/opt/riscv-linux/bin/riscv64-unknown-linux-gnu- \
     -DNN_PLATFORM=linux-pk -DNN_BACKEND=vector \
-    -DNN_TESTBENCH=sentence_inference_fp32 -DNN_CONFIG=zvl128b
+    -DNN_TESTBENCH=sentence_inference_fp32 -DNN_CONFIG=zvl128b \
+    -DNN_AUTO_VECTORIZE=ON
 ```
 
 The bare-metal equivalent variable is `RISCV_BAREMETAL_PREFIX`.
@@ -521,7 +534,8 @@ make -j$(nproc) linux \
     TESTBENCH=sentence_inference_fp32 \
     BACKEND=cpu \
     CONFIG=default \
-    LINK_MODE=static
+    LINK_MODE=static \
+    AUTO_VECTORIZE=0
 ```
 
 Linux/Spike pk with explicit RVV and a 128-bit VLEN profile:
@@ -531,7 +545,8 @@ make -j$(nproc) linux \
     TESTBENCH=sentence_inference_fp32 \
     BACKEND=vector \
     CONFIG=zvl512b_cycle \
-    LINK_MODE=static
+    LINK_MODE=static \
+    AUTO_VECTORIZE=1
 
 spike --isa=rv64gcv_zicntr_zihpm_zvbb_zvl512b_zve64d \
     pk \
@@ -544,7 +559,8 @@ Bare-metal ELF and raw SD-card image for the `V128D128B` hardware profile:
 make -j$(nproc) baremetal \
     TESTBENCH=sentence_inference_fp32 \
     BACKEND=vector \
-    HARDWARE_CONFIG=V128D128B
+    HARDWARE_CONFIG=V128D128B \
+    AUTO_VECTORIZE=1
 ```
 
 Generated files:
@@ -666,21 +682,21 @@ make baremetal CROSS_COMPILE=/opt/riscv-elf/bin/riscv64-unknown-elf- ...
 Build the scalar CPU baseline without the Vector Extension:
 
 ```sh
-make linux TESTBENCH=sentence_inference_fp32 BACKEND=cpu CONFIG=default
-make linux TESTBENCH=sentence_inference_int8 BACKEND=cpu CONFIG=default
+make linux TESTBENCH=sentence_inference_fp32 BACKEND=cpu CONFIG=default AUTO_VECTORIZE=0
+make linux TESTBENCH=sentence_inference_int8 BACKEND=cpu CONFIG=default AUTO_VECTORIZE=0
 ```
 
 Build the explicit RVV implementation:
 
 ```sh
-make linux TESTBENCH=sentence_inference_fp32 BACKEND=vector CONFIG=zvl128b
-make linux TESTBENCH=sentence_inference_int8 BACKEND=vector CONFIG=zvl512b_cycle
+make linux TESTBENCH=sentence_inference_fp32 BACKEND=vector CONFIG=zvl128b AUTO_VECTORIZE=1
+make linux TESTBENCH=sentence_inference_int8 BACKEND=vector CONFIG=zvl512b_cycle AUTO_VECTORIZE=1
 ```
 
 Build both backends into the same testbench binary:
 
 ```sh
-make linux TESTBENCH=sentence_inference_int8 BACKEND=all CONFIG=zvl512b
+make linux TESTBENCH=sentence_inference_int8 BACKEND=all CONFIG=zvl512b AUTO_VECTORIZE=0
 ```
 
 The available Linux testbenches are printed when an invalid `TESTBENCH` is
@@ -693,7 +709,7 @@ and `all` builds require a vector-capable profile.
 
 ```sh
 make linux TESTBENCH=sentence_inference_fp32 BACKEND=vector \
-    CONFIG=zvl512b_cycle LINK_MODE=static
+    CONFIG=zvl512b_cycle LINK_MODE=static AUTO_VECTORIZE=1
 
 spike --isa=rv64gcv_zicntr_zihpm_zvbb_zvl512b_zve64d \
     pk \
@@ -705,7 +721,7 @@ binary:
 
 ```sh
 make linux TESTBENCH=sentence_inference_fp32 BACKEND=cpu \
-    CONFIG=default LINK_MODE=dynamic
+    CONFIG=default LINK_MODE=dynamic AUTO_VECTORIZE=0
 ```
 
 Linux/pk outputs are ELF executables even though their filenames have no
@@ -718,8 +734,8 @@ build/linux-pk/<testbench>/<config>/<backend>/<link-mode>/<testbench>
 The shorter direct targets remain available, for example:
 
 ```sh
-make sentence_inference_int8_static BACKEND=vector CONFIG=zvl512b
-make sentence_inference_int8_dynamic BACKEND=cpu CONFIG=default
+make sentence_inference_int8_static BACKEND=vector CONFIG=zvl512b AUTO_VECTORIZE=1
+make sentence_inference_int8_dynamic BACKEND=cpu CONFIG=default AUTO_VECTORIZE=0
 ```
 
 ### Bare-metal
@@ -730,9 +746,9 @@ The bare-metal build currently supports
 a raw image, ELF, or disassembly with:
 
 ```sh
-make baremetal TESTBENCH=sentence_inference_fp32 BACKEND=vector
-make baremetal-elf TESTBENCH=sentence_inference_fp32 BACKEND=vector
-make baremetal-dump TESTBENCH=sentence_inference_fp32 BACKEND=vector
+make baremetal TESTBENCH=sentence_inference_fp32 BACKEND=vector AUTO_VECTORIZE=1
+make baremetal-elf TESTBENCH=sentence_inference_fp32 BACKEND=vector AUTO_VECTORIZE=1
+make baremetal-dump TESTBENCH=sentence_inference_fp32 BACKEND=vector AUTO_VECTORIZE=1
 ```
 
 Build the INT8 sentence benchmark with:
@@ -741,7 +757,8 @@ Build the INT8 sentence benchmark with:
 make -j$(nproc) baremetal \
     TESTBENCH=sentence_inference_int8 \
     BACKEND=vector \
-    HARDWARE_CONFIG=V128D128B
+    HARDWARE_CONFIG=V128D128B \
+    AUTO_VECTORIZE=1
 ```
 
 The resulting image executes the same INT8 testbench `main()` as Linux/Spike;
@@ -751,10 +768,10 @@ Build the Gesture FP32 and Kyber images with:
 
 ```sh
 make -j$(nproc) baremetal TESTBENCH=gesture_model BACKEND=vector \
-    HARDWARE_CONFIG=V128D128B
+    HARDWARE_CONFIG=V128D128B AUTO_VECTORIZE=1
 
 make -j$(nproc) baremetal TESTBENCH=kyber BACKEND=vector \
-    HARDWARE_CONFIG=V128D128B
+    HARDWARE_CONFIG=V128D128B AUTO_VECTORIZE=1
 ```
 
 Their raw images are written to:
@@ -768,17 +785,19 @@ Use the same testbench name with `baremetal-flash`. For example:
 
 ```sh
 make baremetal-flash TESTBENCH=gesture_model BACKEND=vector \
-    HARDWARE_CONFIG=V128D128B SDCARD_DEVICE=/dev/sdc FLASH_CONFIRM=YES
+    HARDWARE_CONFIG=V128D128B AUTO_VECTORIZE=1 \
+    SDCARD_DEVICE=/dev/sdc FLASH_CONFIRM=YES
 
 make baremetal-flash TESTBENCH=kyber BACKEND=vector \
-    HARDWARE_CONFIG=V128D128B SDCARD_DEVICE=/dev/sdc FLASH_CONFIRM=YES
+    HARDWARE_CONFIG=V128D128B AUTO_VECTORIZE=1 \
+    SDCARD_DEVICE=/dev/sdc FLASH_CONFIRM=YES
 ```
 
 Select the hardware vector profile when required:
 
 ```sh
 make baremetal TESTBENCH=sentence_inference_fp32 BACKEND=vector \
-    HARDWARE_CONFIG=V512D128B
+    HARDWARE_CONFIG=V512D128B AUTO_VECTORIZE=1
 ```
 
 Supported bare-metal hardware profiles are `V128D128B`, `V256D128B`, and
@@ -796,9 +815,11 @@ adapter to keep synchronized.
 
 ### Build controls and cleanup
 
-Compiler auto-vectorization is disabled by default for every backend so the CPU
-baseline stays scalar even when `-march` contains `v`. Explicit RVV intrinsics
-are unaffected. Enable compiler-generated vectorization only for experiments:
+The legacy Make path follows the same backend policy automatically: `vector`
+defaults to `AUTO_VECTORIZE=1`, while pure CPU, Gemmini, and `all` default to
+`AUTO_VECTORIZE=0` so their reference/host code stays scalar. An explicit
+command-line value overrides that default. Explicit RVV intrinsics are
+unaffected by this switch:
 
 ```sh
 make linux TESTBENCH=sentence_inference_fp32 BACKEND=vector \
@@ -835,7 +856,8 @@ This removes all generated Linux, Spike pk, and bare-metal files under
 make -j$(nproc) baremetal-elf \
     TESTBENCH=sentence_inference_fp32 \
     BACKEND=vector \
-    HARDWARE_CONFIG=V128D128B
+    HARDWARE_CONFIG=V128D128B \
+    AUTO_VECTORIZE=1
 ```
 
 The ELF contains section addresses, symbols, and debug information. The linker
@@ -852,7 +874,8 @@ build/baremetal/sentence_inference_fp32/V128D128B_nn_rvv_baremetal.elf
 make -j$(nproc) baremetal-dump \
     TESTBENCH=sentence_inference_fp32 \
     BACKEND=vector \
-    HARDWARE_CONFIG=V128D128B
+    HARDWARE_CONFIG=V128D128B \
+    AUTO_VECTORIZE=1
 
 riscv64-unknown-elf-readelf -h \
     build/baremetal/sentence_inference_fp32/V128D128B_nn_rvv_baremetal.elf
@@ -866,7 +889,8 @@ The disassembly is written beside the ELF with a `.dump` suffix.
 make -j$(nproc) baremetal \
     TESTBENCH=sentence_inference_fp32 \
     BACKEND=vector \
-    HARDWARE_CONFIG=V128D128B
+    HARDWARE_CONFIG=V128D128B \
+    AUTO_VECTORIZE=1
 ```
 
 This keeps the ELF and generates the raw image consumed by the board boot flow:
@@ -896,6 +920,7 @@ make baremetal-flash \
     TESTBENCH=sentence_inference_fp32 \
     BACKEND=vector \
     HARDWARE_CONFIG=V128D128B \
+    AUTO_VECTORIZE=1 \
     SDCARD_DEVICE=/dev/sdc
 ```
 
@@ -927,6 +952,7 @@ make baremetal-flash \
     TESTBENCH=sentence_inference_fp32 \
     BACKEND=vector \
     HARDWARE_CONFIG=V128D128B \
+    AUTO_VECTORIZE=1 \
     SDCARD_DEVICE=/dev/sdc \
     FLASH_CONFIRM=YES
 ```
@@ -1067,12 +1093,10 @@ tables. Use those files to record metrics such as cycles, CPI, and runtime.
 
 ## Implementation Notes
 
-- Compiler auto-vectorization and builtin expansion are disabled by default on
-  both platforms. RVV kernels use explicit intrinsics, while scalar/reference
-  kernels remain true scalar baselines even when the selected `-march` includes
-  `V`; calls such as `memcpy` are not silently expanded into RVV loops. Set
-  `AUTO_VECTORIZE=1` only when intentionally evaluating compiler-generated
-  vector code.
+- `configure_build.sh` enables compiler auto-vectorization for the `vector`
+  backend and disables it for CPU, Gemmini, and `all`. With legacy Make, pass
+  `AUTO_VECTORIZE=1` for vector builds and retain `AUTO_VECTORIZE=0` for the
+  scalar/reference paths. Explicit RVV intrinsics do not depend on this switch.
 - The inference runtime uses ping-pong working buffers (`buffer1`, `buffer2`).
   The final output buffer depends on layer-count parity: odd layer counts end
   in `buffer2`, even layer counts end in `buffer1`.

@@ -169,6 +169,6 @@ void init_pingpong_buffer(size_t num_elem, elem_type dtype) {
 #endif
 
 int main() {
-    test_sentence_logit_fp32();
+    sentence_all_f32();
     return 0;
 }

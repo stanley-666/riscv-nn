@@ -79,9 +79,14 @@ endif
 # RISC-V gnu Compiler flags
 CFLAGS  := -O3 -march=$(ARCH) -mabi=$(ABI) -Wall -Wextra -std=c11 $(INCLUDE)
 CFLAGS  += $(NN_BACKEND_CPPFLAGS)
-# RVV is emitted only by explicit intrinsics unless a caller opts in to GCC
-# auto-vectorization. This keeps scalar/reference kernels valid as baselines.
-AUTO_VECTORIZE ?= 0
+# Match the CMake helper policy: compiler auto-vectorization is enabled by
+# default only for the vector backend. Command-line assignments still override
+# this backend-derived default.
+ifeq ($(BACKEND),vector)
+  AUTO_VECTORIZE ?= 1
+else
+  AUTO_VECTORIZE ?= 0
+endif
 ifeq ($(AUTO_VECTORIZE),0)
   CFLAGS += -fno-tree-vectorize -fno-tree-slp-vectorize -fno-builtin
 endif
