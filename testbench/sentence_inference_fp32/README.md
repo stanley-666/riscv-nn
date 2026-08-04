@@ -91,3 +91,8 @@ Python test data 2658th : 11.355240
 
 Inference time: 7.949469 seconds
 Overall accuracy: 99.25% (2638/2658 correct)
+
+
+## 100 samples results
+
+[20], [22], [42] false

@@ -85,3 +85,8 @@ rejects partitions and mounted devices, then writes the binary beginning at
 | Cycles | 10083273 | 5099263 | 2629576 | |
 | CPI |  |  |
 | Runtime |  |  |
+
+
+## 100 samples results
+
+[20], [22], [46] false
