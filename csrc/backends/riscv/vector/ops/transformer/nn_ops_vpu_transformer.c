@@ -56,48 +56,58 @@ void attention1d_fp32_vpu(NNModule *layer, void *input, void *output)
     const float *output_weights = (const float *)layer->params.attention.out_proj_weight_rvv;
     const float *output_bias = (const float *)layer->params.attention.out_proj_bias;
     float *qkv = (float *)layer->params.attention.qkv_buffer;
+    float *key_transposed = (float *)layer->params.attention.key_transposed_buffer;
     float *context = (float *)layer->params.attention.ctx_buffer;
     float *projection = (float *)layer->params.attention.proj_buffer;
     float *scores = (float *)layer->params.attention.score_buffer;
 
     linear_rows_fp32_rvv(input_f32, seq_len, embed_dim, qkv_dim, input_weights, input_bias, qkv);
-    memset(context, 0, (size_t)seq_len * embed_dim * sizeof(float));
 
+    /*
+     * Pack K as [head][head_dim][sequence].  This turns Q K^T for one
+     * query/head into the same scalar-vector GEMV dataflow used by the RVV
+     * Conv1D kernels: broadcast Q[d], load contiguous keys for several
+     * sequence positions, and accumulate several scores without reductions.
+     */
+    for (int h = 0; h < num_heads; ++h) {
+        for (int d = 0; d < head_dim; ++d) {
+            float *packed = &key_transposed[(h * head_dim + d) * seq_len];
+            for (int s = 0; s < seq_len; ++s) {
+                packed[s] = qkv[s * qkv_dim + embed_dim + h * head_dim + d];
+            }
+        }
+    }
     for (int t = 0; t < seq_len; ++t) {
         const float *query_row = &qkv[t * qkv_dim];
         for (int h = 0; h < num_heads; ++h) {
             const float *query = &query_row[h * head_dim];
-            for (int s = 0; s < seq_len; ++s) {
-                const float *source = &qkv[s * qkv_dim];
-                const float *key = &source[embed_dim + h * head_dim];
-                float dot = 0.0f;
-                for (int d = 0; d < head_dim; ) {
-                    size_t vl = __riscv_vsetvl_e32m8(head_dim - d);
-                    vfloat32m8_t queries = __riscv_vle32_v_f32m8(&query[d], vl);
-                    vfloat32m8_t keys = __riscv_vle32_v_f32m8(&key[d], vl);
-                    vfloat32m8_t products = __riscv_vfmul_vv_f32m8(queries, keys, vl);
-                    vfloat32m1_t init = __riscv_vfmv_s_f_f32m1(0.0f, 1);
-                    vfloat32m1_t reduced = __riscv_vfredusum_vs_f32m8_f32m1(products, init, vl);
-                    dot += __riscv_vfmv_f_s_f32m1_f32(reduced);
-                    d += (int)vl;
+            for (int s = 0; s < seq_len; ) {
+                size_t vl = __riscv_vsetvl_e32m8(seq_len - s);
+                vfloat32m8_t score_vec = __riscv_vfmv_v_f_f32m8(0.0f, vl);
+                for (int d = 0; d < head_dim; ++d) {
+                    const float *packed = &key_transposed[(h * head_dim + d) * seq_len + s];
+                    vfloat32m8_t keys = __riscv_vle32_v_f32m8(packed, vl);
+                    score_vec = __riscv_vfmacc_vf_f32m8(score_vec, query[d], keys, vl);
                 }
-                scores[s] = dot * scale;
+                score_vec = __riscv_vfmul_vf_f32m8(score_vec, scale, vl); // normalization * 1/sqrt(dk)
+                __riscv_vse32_v_f32m8(&scores[s], score_vec, vl);
+                s += (int)vl;
             }
             softmax_f32(scores, scores, seq_len);
 
             float *context_head = &context[t * embed_dim + h * head_dim];
-            for (int s = 0; s < seq_len; ++s) {
-                float coefficient = scores[s];
-                const float *source = &qkv[s * qkv_dim];
-                const float *value = &source[2 * embed_dim + h * head_dim];
-                for (int d = 0; d < head_dim; ) {
-                    size_t vl = __riscv_vsetvl_e32m8(head_dim - d);
-                    vfloat32m8_t accumulated = __riscv_vle32_v_f32m8(&context_head[d], vl);
-                    vfloat32m8_t values = __riscv_vle32_v_f32m8(&value[d], vl);
-                    accumulated = __riscv_vfmacc_vf_f32m8(accumulated, coefficient, values, vl);
-                    __riscv_vse32_v_f32m8(&context_head[d], accumulated, vl);
-                    d += (int)vl;
+            for (int d = 0; d < head_dim; ) {
+                size_t vl = __riscv_vsetvl_e32m8(head_dim - d);
+                vfloat32m8_t accumulated = __riscv_vfmv_v_f_f32m8(0.0f, vl);
+                for (int s = 0; s < seq_len; ++s) {
+                    const float *value = &qkv[s * qkv_dim + 2 * embed_dim
+                                              + h * head_dim + d];
+                    vfloat32m8_t values = __riscv_vle32_v_f32m8(value, vl);
+                    accumulated = __riscv_vfmacc_vf_f32m8(
+                        accumulated, scores[s], values, vl);
                 }
+                __riscv_vse32_v_f32m8(&context_head[d], accumulated, vl);
+                d += (int)vl;
             }
         }
     }

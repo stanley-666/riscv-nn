@@ -382,6 +382,7 @@ NNModule *nn_MultiHeadAttention1d(int inputWidth,
         layer->params.attention.in_proj_weight_rvv = pack_linear_weights_f32((const float *)inProjWeight, embedDim, qkvDim);
         layer->params.attention.out_proj_weight_rvv = pack_linear_weights_f32((const float *)outProjWeight, embedDim, embedDim);
         layer->params.attention.qkv_buffer = safe_malloc((size_t)inputWidth * qkvDim * sizeof(float));
+        layer->params.attention.key_transposed_buffer = safe_malloc((size_t)inputWidth * embedDim * sizeof(float));
         layer->params.attention.ctx_buffer = safe_malloc((size_t)inputWidth * embedDim * sizeof(float));
         layer->params.attention.proj_buffer = safe_malloc((size_t)inputWidth * embedDim * sizeof(float));
         layer->params.attention.score_buffer = safe_malloc((size_t)inputWidth * sizeof(float));
@@ -389,6 +390,7 @@ NNModule *nn_MultiHeadAttention1d(int inputWidth,
         layer->params.attention.in_proj_weight_rvv = pack_linear_weights_i8((const int8_t *)inProjWeight, embedDim, qkvDim);
         layer->params.attention.out_proj_weight_rvv = pack_linear_weights_i8((const int8_t *)outProjWeight, embedDim, embedDim);
         layer->params.attention.qkv_buffer = safe_malloc((size_t)inputWidth * qkvDim * sizeof(int8_t));
+        layer->params.attention.key_transposed_buffer = safe_malloc((size_t)inputWidth * embedDim * sizeof(int8_t));
         layer->params.attention.ctx_buffer = safe_malloc((size_t)inputWidth * embedDim * sizeof(int8_t));
         layer->params.attention.proj_buffer = safe_malloc((size_t)inputWidth * embedDim * sizeof(int8_t));
         layer->params.attention.score_buffer = safe_malloc((size_t)inputWidth * sizeof(float));
@@ -621,6 +623,7 @@ void freeCNN(CNN *net)
             safe_free(currentLayer->params.attention.in_proj_weight_rvv);
             safe_free(currentLayer->params.attention.out_proj_weight_rvv);
             safe_free(currentLayer->params.attention.qkv_buffer);
+            safe_free(currentLayer->params.attention.key_transposed_buffer);
             safe_free(currentLayer->params.attention.ctx_buffer);
             safe_free(currentLayer->params.attention.proj_buffer);
             safe_free(currentLayer->params.attention.score_buffer);

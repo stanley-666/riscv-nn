@@ -9,7 +9,18 @@ row Softmax, weighted value accumulation, and RVV output projection. Tensor
 layout is sequence-major `[sequence][embedding]`; `embed_dim` must agree with
 `num_heads * head_dim`.
 
-The layer owns preallocated QKV, context, projection, and score buffers.
+After projection, keys are packed as `[head][head_dim][sequence]`. Each query
+component is then broadcast as a scalar while contiguous keys and score
+accumulators are processed as RVV vectors. This maps QK-transpose to GEMV and
+avoids one vector reduction per query/key pair.
+
+The score-weighted value sum keeps each context vector chunk in an RVV
+accumulator across the complete sequence. The accumulator starts at zero and
+is stored once, so the context buffer needs neither a preceding clear nor a
+load/store pair for every source position.
+
+The layer owns preallocated QKV, transposed-key, context, projection, and score
+buffers.
 Attention currently calls the scalar full-row Softmax reference for its score
 vectors; it does not yet use the approximate public RVV Softmax. This difference
 must be recorded when comparing attention results or cycles.

@@ -81,6 +81,7 @@ typedef struct {
     int head_dim;
     float scale;
     void *qkv_buffer;
+    void *key_transposed_buffer;
     void *ctx_buffer;
     void *proj_buffer;
     void *score_buffer;
