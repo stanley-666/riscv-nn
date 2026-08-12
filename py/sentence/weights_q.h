@@ -1,3 +1,5 @@
+/* SPDX-FileContributor: Person: Stanley Lee */
+/* SPDX-License-Identifier: Apache-2.0 */
 #ifndef WEIGHTS_Q_H
 #define WEIGHTS_Q_H
 

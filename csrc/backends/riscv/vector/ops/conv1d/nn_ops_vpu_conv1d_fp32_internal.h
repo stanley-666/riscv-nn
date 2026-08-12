@@ -1,3 +1,4 @@
+/* SPDX-FileContributor: Person: Stanley Lee */
 #ifndef _NN_OPS_VPU_CONV1D_FP32_H_
 #define _NN_OPS_VPU_CONV1D_FP32_H_
 

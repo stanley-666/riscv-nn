@@ -1,3 +1,5 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # NN Header API (C)
 
 This folder defines the public C API for building and running CNN graphs

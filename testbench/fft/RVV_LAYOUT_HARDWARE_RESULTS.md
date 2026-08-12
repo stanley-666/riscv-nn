@@ -1,3 +1,5 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # FFT memory-layout and RVV FPGA results
 
 This document summarizes the current 1,024-point, 64-batch Genesys2 FPGA

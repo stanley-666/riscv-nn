@@ -1,3 +1,5 @@
+/* SPDX-FileContributor: Person: Stanley Lee */
+/* SPDX-License-Identifier: Apache-2.0 */
 /* Linker script tailored for Genesys2 (Rocket RV64) memory map.
  * Adjust MEMORY region if targeting a different platform. */
 OUTPUT_ARCH(riscv)

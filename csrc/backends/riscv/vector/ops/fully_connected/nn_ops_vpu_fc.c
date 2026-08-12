@@ -1,3 +1,4 @@
+/* SPDX-FileContributor: Person: Stanley Lee */
 #include "nn_layer.h"
 #include "nn_utils.h"
 #include "backends/riscv/vector/ops/activation/nn_activation_int_internal.h"

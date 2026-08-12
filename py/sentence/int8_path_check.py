@@ -1,3 +1,5 @@
+# SPDX-FileContributor: Person: Stanley Lee
+# SPDX-License-Identifier: Apache-2.0
 """
 Manual int8 forward that mirrors the C path:
 - Uses quantized conv/linear modules from the calibrated checkpoint.

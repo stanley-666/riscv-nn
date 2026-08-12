@@ -1,3 +1,4 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
 # CPU Tensor Operators
 
 Scalar reference utilities used between neural-network layers.

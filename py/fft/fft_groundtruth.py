@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileContributor: Person: Stanley Lee
+# SPDX-License-Identifier: Apache-2.0
 """Generate and validate a deterministic complex FFT ground truth."""
 
 from __future__ import annotations

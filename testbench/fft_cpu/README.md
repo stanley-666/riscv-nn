@@ -1,3 +1,5 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # Scalar CPU FFT testbench
 
 Linux/Spike and bare-metal compile the same `testbench/fft_cpu/fft_cpu.c`

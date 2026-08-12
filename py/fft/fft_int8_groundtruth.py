@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileContributor: Person: Stanley Lee
+# SPDX-License-Identifier: Apache-2.0
 """Generate bit-exact Q7 data for the scaled radix-2 int8 FFT testbench."""
 
 from __future__ import annotations

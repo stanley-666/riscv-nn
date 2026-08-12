@@ -1,3 +1,5 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # FFT Architecture Performance Analysis
 
 > **Current data status:** RVV batch-major is implemented, validated, and

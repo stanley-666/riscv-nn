@@ -1,3 +1,4 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
 # RVV Activation Operators
 
 This directory contains the RISC-V Vector (RVV) activation kernels. Some

@@ -1,3 +1,4 @@
+/* SPDX-FileContributor: Person: Stanley Lee */
 #include "nn_ops_vpu_transformer_internal.h"
 
 #include "nn_utils.h"

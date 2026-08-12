@@ -1,3 +1,4 @@
+/* SPDX-FileContributor: Person: Stanley Lee */
 /* SPDX-License-Identifier: Apache-2.0 */
 #ifndef FFT_MIXED_RADIX_Q7_H
 #define FFT_MIXED_RADIX_Q7_H

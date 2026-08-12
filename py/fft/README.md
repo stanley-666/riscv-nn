@@ -1,3 +1,5 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # FFT ground truth example
 
 `fft_groundtruth.py` creates a deterministic complex input, uses

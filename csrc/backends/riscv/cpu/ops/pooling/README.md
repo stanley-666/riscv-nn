@@ -1,3 +1,4 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
 # CPU Pooling
 
 Scalar reference implementations for 1D/2D max and average pooling, adaptive

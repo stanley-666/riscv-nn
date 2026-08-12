@@ -1,3 +1,4 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
 # CPU Fully Connected
 
 Scalar reference implementation for `y = Wx + b`. The internal entry point is

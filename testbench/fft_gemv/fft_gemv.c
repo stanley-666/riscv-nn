@@ -1,3 +1,4 @@
+/* SPDX-FileContributor: Person: Stanley Lee */
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Complex DFT expressed as Conv1D-style scalar-vector GEMV MACs. */
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileContributor: Person: Stanley Lee
+# SPDX-License-Identifier: Apache-2.0
 """
 Batch run FP32 C vs Python logits comparison for many embeddings.
 

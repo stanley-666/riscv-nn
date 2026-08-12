@@ -1,3 +1,5 @@
+# SPDX-FileContributor: Person: Stanley Lee
+# SPDX-License-Identifier: Apache-2.0
 import torch
 import torch.nn as nn
 import torchvision.models as models

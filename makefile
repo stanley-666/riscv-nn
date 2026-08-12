@@ -1,3 +1,5 @@
+# SPDX-FileContributor: Person: Stanley Lee
+# SPDX-License-Identifier: Apache-2.0
 # RISC-V Linux Cross Compiler
 CROSS_COMPILE ?= riscv64-unknown-linux-gnu-
 CC      := $(CROSS_COMPILE)gcc

@@ -1,3 +1,4 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
 # RVV Fully Connected
 
 Explicit RVV kernels for FP32 and INT8 fully connected layers.

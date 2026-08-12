@@ -1,3 +1,4 @@
+/* SPDX-FileContributor: Person: Stanley Lee */
 #ifndef _NN_UTILS_H_
 #define _NN_UTILS_H_
 

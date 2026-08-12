@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileContributor: Person: Stanley Lee
+# SPDX-License-Identifier: Apache-2.0
 """
 Compare TensorFlow (architecture.py model) and torch_fused_model inference on the same input.
 

@@ -1,3 +1,5 @@
+/* SPDX-FileContributor: Person: Stanley Lee */
+/* SPDX-License-Identifier: Apache-2.0 */
 .section .text.start
 .globl _start
 .option norvc

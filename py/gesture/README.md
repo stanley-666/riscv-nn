@@ -1,3 +1,5 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # gesture
 
 這個專案包含一個 1D CNN 的手勢分類模型與一系列工具，涵蓋：

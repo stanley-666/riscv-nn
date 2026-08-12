@@ -1,3 +1,5 @@
+/* SPDX-FileContributor: Person: Stanley Lee */
+/* SPDX-License-Identifier: Apache-2.0 */
 #include "nn_param.h"
 
 /* Single definition of global buffers used across the project. */

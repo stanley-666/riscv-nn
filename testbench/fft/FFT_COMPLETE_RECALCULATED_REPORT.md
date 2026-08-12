@@ -1,3 +1,5 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # FFT 完整效能重算報告
 
 本報告統一整理 1,024-point、64-batch FFT 在 scalar CPU、RVV 與

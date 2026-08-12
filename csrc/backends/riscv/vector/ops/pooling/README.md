@@ -1,3 +1,4 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
 # RVV Pooling
 
 Explicit RVV 1D/2D pooling operators for FP32 and INT8.

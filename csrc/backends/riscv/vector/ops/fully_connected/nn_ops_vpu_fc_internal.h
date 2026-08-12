@@ -1,3 +1,4 @@
+/* SPDX-FileContributor: Person: Stanley Lee */
 #ifndef _NN_OPS_VPU_FC_H_
 #define _NN_OPS_VPU_FC_H_
 

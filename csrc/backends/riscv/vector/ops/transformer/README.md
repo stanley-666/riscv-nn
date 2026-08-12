@@ -1,3 +1,4 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
 # RVV Transformer Operators
 
 This directory contains FP32 multi-head self-attention. LayerNorm is maintained

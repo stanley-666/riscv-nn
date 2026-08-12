@@ -1,3 +1,5 @@
+/* SPDX-FileContributor: Person: Stanley Lee */
+/* SPDX-License-Identifier: Apache-2.0 */
 #ifndef GESTURE_INPUT_H
 #define GESTURE_INPUT_H
 // gesture inputs (len=50, C=5)

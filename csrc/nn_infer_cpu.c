@@ -1,3 +1,5 @@
+/* SPDX-FileContributor: Person: Stanley Lee */
+/* SPDX-License-Identifier: Apache-2.0 */
 #include "nn_infer_cpu.h"
 #include "backends/riscv/cpu/ops/nn_ops_cpu_internal.h"
 #include <stdio.h>

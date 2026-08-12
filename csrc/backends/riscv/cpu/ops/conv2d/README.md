@@ -1,3 +1,4 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
 # CPU Conv2D
 
 Scalar reference implementation for two-dimensional convolution. The internal

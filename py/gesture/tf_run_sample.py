@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileContributor: Person: Stanley Lee
+# SPDX-License-Identifier: Apache-2.0
 """
 Run TensorFlow inference on the hard-coded gesture sample (converted from C array).
 """

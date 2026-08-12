@@ -1,3 +1,5 @@
+/* SPDX-FileContributor: Person: Stanley Lee */
+/* SPDX-License-Identifier: Apache-2.0 */
 #include "nn_activation_int_internal.h"
 #include "nn_utils.h"
 

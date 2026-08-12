@@ -1,3 +1,5 @@
+# SPDX-FileContributor: Person: Stanley Lee
+# SPDX-License-Identifier: Apache-2.0
 import tensorflow as tf
 from tensorflow.keras.layers import Conv1D, Activation, BatchNormalization, Dense, Flatten
 from tensorflow import keras

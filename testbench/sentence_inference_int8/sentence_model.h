@@ -1,3 +1,5 @@
+/* SPDX-FileContributor: Person: Stanley Lee */
+/* SPDX-License-Identifier: Apache-2.0 */
 #ifndef SENTENCE_INT8_MODEL_H
 #define SENTENCE_INT8_MODEL_H
 

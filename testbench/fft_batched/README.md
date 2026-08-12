@@ -1,3 +1,5 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # Batched RVV FFT testbench
 
 Linux/Spike and bare-metal compile the same

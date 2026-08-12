@@ -1,3 +1,5 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # RVV DFT GEMV testbench
 
 Linux/Spike and bare-metal compile the same `testbench/fft_gemv/fft_gemv.c`

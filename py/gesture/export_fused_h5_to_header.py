@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileContributor: Person: Stanley Lee
+# SPDX-License-Identifier: Apache-2.0
 """
 從 BN 已融合的 Keras .h5 直接導出 C 端使用的權重 header。
 

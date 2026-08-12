@@ -1,3 +1,4 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
 # CPU Normalization
 
 This directory currently contains FP32 LayerNorm through

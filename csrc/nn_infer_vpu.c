@@ -1,3 +1,5 @@
+/* SPDX-FileContributor: Person: Stanley Lee */
+/* SPDX-License-Identifier: Apache-2.0 */
 #include "nn_infer_vpu.h"
 #include "nn_ops.h"
 #include "backends/riscv/vector/ops/conv1d/nn_ops_vpu_conv1d_fp32_internal.h"

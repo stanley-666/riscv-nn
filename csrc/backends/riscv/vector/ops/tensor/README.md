@@ -1,3 +1,4 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
 # RVV Tensor Operators
 
 Explicit RVV data-movement and residual utilities.

@@ -1,3 +1,4 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
 # RVV Conv1D
 
 Explicit RVV FP32 and INT8 one-dimensional convolution kernels. Public model

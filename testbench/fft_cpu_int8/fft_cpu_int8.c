@@ -1,3 +1,4 @@
+/* SPDX-FileContributor: Person: Stanley Lee */
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Scalar reference for the batched radix-2 scaled Q7 FFT. */
 

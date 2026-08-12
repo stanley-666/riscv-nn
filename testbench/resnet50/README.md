@@ -1,3 +1,5 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # ResNet-50 testbench
 
 This testbench currently supports Linux/Spike only. Both CPU and RVV builds

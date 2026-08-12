@@ -1,3 +1,4 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
 # RVV Normalization
 
 This directory contains `layernorm1d_fp32_vpu`. LayerNorm is separate from the

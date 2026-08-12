@@ -1,3 +1,4 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
 # CPU Transformer Operators
 
 This directory contains the scalar FP32 multi-head self-attention reference.

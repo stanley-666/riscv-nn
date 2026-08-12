@@ -1,3 +1,5 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # RISC-V Inference
 
 This repository provides a C-based neural-network inference stack targeting
@@ -1077,6 +1079,16 @@ toolchains and vector intrinsics, the Chipyard SoC-generation ecosystem,
 Gemmini, and the Spike ISA simulator with the proxy kernel for hosted RISC-V
 testing. The model-building interface and test flow are inspired by common
 neural-network framework conventions.
+
+## Contributors
+
+- **Stanley Lee** — Original author and primary contributor of the
+  project-owned source code, build system, documentation, examples, and
+  testbenches in this repository.
+
+See [`CONTRIBUTORS.md`](CONTRIBUTORS.md) for the attribution scope. Third-party
+Gemmini components and files under `baremetal/include/` are excluded and retain
+their original authorship and license notices.
 
 ## License
 

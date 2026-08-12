@@ -1,3 +1,5 @@
+/* SPDX-FileContributor: Person: Stanley Lee */
+/* SPDX-License-Identifier: Apache-2.0 */
 #ifndef _NN_LAYER_H_
 #define _NN_LAYER_H_
 #include "nn_param.h"

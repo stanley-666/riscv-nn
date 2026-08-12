@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileContributor: Person: Stanley Lee
+# SPDX-License-Identifier: Apache-2.0
 """
 Fuse Conv1D + BatchNormalization pairs inside a Keras model so the exported
 model no longer depends on BN operators (useful for bare‑metal inference).

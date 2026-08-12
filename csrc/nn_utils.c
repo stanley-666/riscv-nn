@@ -1,3 +1,5 @@
+/* SPDX-FileContributor: Person: Stanley Lee */
+/* SPDX-License-Identifier: Apache-2.0 */
 #include "nn_utils.h"
 /* Utility functions for 1D CNN on embedded RISC-V System */
 

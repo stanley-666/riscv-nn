@@ -1,3 +1,4 @@
+<!-- SPDX-FileContributor: Person: Stanley Lee -->
 # CPU Conv1D
 
 Scalar reference implementation for one-dimensional convolution. The internal
